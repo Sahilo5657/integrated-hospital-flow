@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../common/ui_shell.dart';
+import '../routes/role_router.dart';
 import 'auth_service.dart';
 
 class RegisterScreen extends StatefulWidget {
@@ -53,7 +54,11 @@ class _RegisterScreenState extends State<RegisterScreen> {
         nfcCardId: _selectedRole == 'patient' ? nfcId : null,
       );
 
-      if (mounted) Navigator.of(context).pop();
+      if (!mounted) return;
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const RoleRouter()),
+        (route) => false,
+      );
     } catch (e) {
       if (mounted) {
         setState(() => _isLoading = false);

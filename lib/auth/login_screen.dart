@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../common/ui_shell.dart';
+import '../routes/role_router.dart';
 import 'auth_service.dart';
 import 'register_screen.dart';
 
@@ -33,8 +34,16 @@ class _LoginScreenState extends State<LoginScreen> {
         _emailController.text.trim(),
         _passwordController.text.trim(),
       );
-      // Success: AuthGate will automatically handle the redirect to RoleRouter
+      if (!mounted) return;
+      // Navigate explicitly — do NOT rely on AuthGate being alive.
+      // After logout the app pushes a standalone LoginScreen (removing AuthGate
+      // from the tree), so authStateChanges() has no listener. We must route here.
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const RoleRouter()),
+        (route) => false,
+      );
     } catch (e) {
+      if (!mounted) return;
       setState(() => _isLoading = false);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(e.toString().replaceAll('Exception: ', ''))),
