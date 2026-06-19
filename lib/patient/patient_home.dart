@@ -3,6 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../common/ui_shell.dart';
 import '../auth/login_screen.dart';
+import '../wall/wall_mounted_screen.dart';
 import 'patient_queue_screen.dart';
 import 'patient_summary_screen.dart';
 
@@ -281,7 +282,20 @@ class _PatientHomeState extends State<PatientHome> {
             },
           ),
 
-          const SizedBox(height: 32),
+          const SizedBox(height: 16),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                    builder: (_) => const WallMountedScreen()),
+              ),
+              icon: const Icon(Icons.tv),
+              label: const Text("View Live Queue Board"),
+            ),
+          ),
+          const SizedBox(height: 24),
           const Divider(),
           const SizedBox(height: 8),
 

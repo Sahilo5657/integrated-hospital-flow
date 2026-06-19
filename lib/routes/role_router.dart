@@ -6,6 +6,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import '../doctor/doctor_home.dart';
 import '../staff/staff_home.dart';
 import '../patient/patient_home.dart';
+import '../wall/wall_mounted_screen.dart';
 
 class RoleRouter extends StatefulWidget {
   const RoleRouter({super.key});
@@ -44,6 +45,9 @@ class _RoleRouterState extends State<RoleRouter> {
     final user = FirebaseAuth.instance.currentUser;
     if (user?.email != null) {
       final email = user!.email!.toLowerCase();
+      if (email == 'wallmounted@gmail.com' || email.contains('wallmount')) {
+        return const WallMountedScreen();
+      }
       if (email == 'sahilo5657@gmail.com' || email.contains('doctor')) {
         return const DoctorHome();
       }
