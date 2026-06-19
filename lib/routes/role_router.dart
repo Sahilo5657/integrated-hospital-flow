@@ -7,68 +7,74 @@ import '../doctor/doctor_home.dart';
 import '../staff/staff_home.dart';
 import '../patient/patient_home.dart';
 
-class RoleRouter extends StatelessWidget {
+class RoleRouter extends StatefulWidget {
   const RoleRouter({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    final authService = context.read<AuthService>();
-    final user = FirebaseAuth.instance.currentUser;
+  State<RoleRouter> createState() => _RoleRouterState();
+}
 
-    if (user == null) {
-      return const Scaffold(body: Center(child: Text("Not logged in.")));
+class _RoleRouterState extends State<RoleRouter> {
+  late Future<UserProfile?> _profileFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    // Store the Future once — never recreated on rebuilds.
+    // This is critical: a StatelessWidget would create a new Future on every
+    // parent rebuild (AuthGate fires multiple times on login), resetting the
+    // spinner indefinitely.
+    final user = FirebaseAuth.instance.currentUser;
+    if (user != null) {
+      _profileFuture = context
+          .read<AuthService>()
+          .getUserProfile(user.uid)
+          .timeout(
+            const Duration(seconds: 5),
+            onTimeout: () => null,
+          );
+    } else {
+      _profileFuture = Future.value(null);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // Email-based bypass runs immediately — no async wait needed for these accounts.
+    final user = FirebaseAuth.instance.currentUser;
+    if (user?.email != null) {
+      final email = user!.email!.toLowerCase();
+      if (email == 'sahilo5657@gmail.com' || email.contains('doctor')) {
+        return const DoctorHome();
+      }
+      if (email == 'eshaan5657@gmail.com' || email.contains('staff')) {
+        return const StaffHome();
+      }
+      if (email.contains('patient') || email.contains('testpatient')) {
+        return const PatientHome();
+      }
     }
 
     return FutureBuilder<UserProfile?>(
-      // Firestore check with 3-second timeout fallback
-      future: authService.getUserProfile(user.uid).timeout(
-        const Duration(seconds: 3),
-        onTimeout: () {
-          debugPrint("RoleRouter: Profile fetch timed out for ${user.email}. Falling back to Patient View.");
-          return null;
-        },
-      ),
+      future: _profileFuture,
       builder: (context, snapshot) {
-        // --- UNCOUPLED DEVELOPMENT BYPASS GATE ---
-        // This executes immediately, bypassing the loading wheel for test accounts.
-        final currentUser = FirebaseAuth.instance.currentUser;
-        if (currentUser != null && currentUser.email != null) {
-          final email = currentUser.email!.toLowerCase();
-
-          // 1. DOCTOR BYPASS
-          if (email == 'sahilo5657@gmail.com' || email.contains('doctor')) {
-            return const DoctorHome();
-          }
-
-          // 2. STAFF BYPASS
-          if (email == 'eshaan5657@gmail.com' || email.contains('staff')) {
-            return const StaffHome();
-          }
-
-          // 3. PATIENT BYPASS
-          if (email.contains('patient') || email.contains('testpatient')) {
-            return const PatientHome();
-          }
-        }
-
-        // Standard loading state for non-bypass accounts
         if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Scaffold(body: Center(child: CircularProgressIndicator()));
+          return const Scaffold(
+            body: Center(child: CircularProgressIndicator()),
+          );
         }
 
         if (snapshot.hasError) {
           debugPrint("RoleRouter Error: ${snapshot.error}");
         }
 
-        UserProfile? profile = snapshot.data;
+        final profile = snapshot.data;
 
-        // If no profile found after timeout or fetch, default to PatientHome
         if (profile == null) {
-          debugPrint("RoleRouter: No profile document found. Routing to PatientHome default.");
+          debugPrint("RoleRouter: No profile found. Defaulting to PatientHome.");
           return const PatientHome();
         }
 
-        // Standard Routing Logic using the Firestore profile
         switch (profile.role) {
           case 'doctor':
             return const DoctorHome();
