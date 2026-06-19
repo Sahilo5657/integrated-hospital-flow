@@ -61,26 +61,31 @@ class _WallMountedScreenState extends State<WallMountedScreen> {
   Widget _buildHeader() {
     return Container(
       color: const Color(0xFF161B22),
-      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
       child: Row(
         children: [
-          const Icon(Icons.local_hospital, color: Color(0xFF58A6FF), size: 26),
-          const SizedBox(width: 10),
-          const Text(
-            'Hospital Patient Flow',
-            style: TextStyle(
-              fontSize: 20,
-              fontWeight: FontWeight.w800,
-              color: Color(0xFFE6EDF3),
+          const Icon(Icons.local_hospital, color: Color(0xFF58A6FF), size: 24),
+          const SizedBox(width: 8),
+          // Flexible lets the title yield space to the right-side elements
+          // instead of pushing them off screen.
+          Flexible(
+            child: Text(
+              'Hospital Patient Flow',
+              style: const TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.w800,
+                color: Color(0xFFE6EDF3),
+              ),
+              overflow: TextOverflow.ellipsis,
             ),
           ),
-          const Spacer(),
+          const SizedBox(width: 12),
           // Live indicator
-          const Icon(Icons.circle, size: 9, color: Color(0xFF3FB950)),
-          const SizedBox(width: 5),
+          const Icon(Icons.circle, size: 8, color: Color(0xFF3FB950)),
+          const SizedBox(width: 4),
           const Text('Live',
-              style: TextStyle(fontSize: 13, color: Color(0xFF3FB950))),
-          const SizedBox(width: 20),
+              style: TextStyle(fontSize: 12, color: Color(0xFF3FB950))),
+          const SizedBox(width: 12),
           // Clock
           Column(
             crossAxisAlignment: CrossAxisAlignment.end,
@@ -89,7 +94,7 @@ class _WallMountedScreenState extends State<WallMountedScreen> {
               Text(
                 _time(),
                 style: const TextStyle(
-                  fontSize: 26,
+                  fontSize: 22,
                   fontWeight: FontWeight.w900,
                   color: Color(0xFFE6EDF3),
                   fontFeatures: [FontFeature.tabularFigures()],
@@ -97,15 +102,16 @@ class _WallMountedScreenState extends State<WallMountedScreen> {
               ),
               Text(_date(),
                   style: const TextStyle(
-                      fontSize: 12, color: Color(0xFF8B949E))),
+                      fontSize: 11, color: Color(0xFF8B949E))),
             ],
           ),
-          const SizedBox(width: 16),
           // Logout
           IconButton(
             onPressed: _logout,
-            icon: const Icon(Icons.logout, color: Color(0xFF8B949E)),
+            icon: const Icon(Icons.logout, color: Color(0xFF8B949E), size: 20),
             tooltip: 'Logout',
+            padding: const EdgeInsets.all(8),
+            constraints: const BoxConstraints(),
           ),
         ],
       ),
