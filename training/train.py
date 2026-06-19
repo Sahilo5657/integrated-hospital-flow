@@ -1,12 +1,47 @@
 #!/usr/bin/env python3
 """
 train.py  —  Fine-tune google/flan-t5-base on mtsamples.csv
-Task    : Medical transcription  →  short clinical description (summarisation)
-Split   : 60% train | 15% validation | 15% test | 10% unused (discarded)
-Metrics : ROUGE-1, ROUGE-2, ROUGE-L  (standard for abstractive summarisation)
+Task    : Medical transcription → short clinical description (abstractive summarisation)
+Split   : 60 % train | 15 % validation | 15 % test | 10 % discarded
+Metrics : ROUGE-1, ROUGE-2, ROUGE-L  (standard for text summarisation)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ HOW TO RUN IN GOOGLE COLAB
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ 1. Open a new Colab notebook  (Runtime → Change runtime type → T4 GPU)
+
+ 2. In the first cell, install dependencies:
+      !pip install transformers datasets evaluate rouge_score accelerate sentencepiece
+
+ 3. Upload mtsamples.csv either:
+      Option A — directly from your machine:
+        from google.colab import files
+        files.upload()            # pick mtsamples.csv → it lands at /content/
+
+      Option B — from Google Drive:
+        from google.colab import drive
+        drive.mount('/content/drive')
+        # then set CSV_PATH below to the Drive path
+
+ 4. Upload this train.py to /content/ and run:
+      !python train.py
+
+    OR paste the whole file into a single Colab code cell and run it.
+
+ 5. After training, the best model is saved to /content/best-model/
+    and optionally pushed to your Hugging Face repo (set HF_REPO below).
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 
-import os, warnings
+# ══════════════════════════════════════════════════════════════════════════════
+# STEP 0 — COLAB PACKAGE INSTALL  (uncomment when running in Colab)
+# ══════════════════════════════════════════════════════════════════════════════
+# import subprocess, sys
+# subprocess.check_call([sys.executable, "-m", "pip", "install", "-q",
+#     "transformers", "datasets", "evaluate", "rouge_score",
+#     "accelerate", "sentencepiece"])
+
+import os, re, warnings
 warnings.filterwarnings("ignore")
 
 import numpy as np
@@ -25,95 +60,275 @@ from transformers import (
 import evaluate
 
 # ══════════════════════════════════════════════════════════════════════════════
-# CONFIGURATION
+# STEP 1 — CONFIGURATION  (edit these before running)
 # ══════════════════════════════════════════════════════════════════════════════
 MODEL_ID   = "google/flan-t5-base"
-CSV_PATH   = "../mtsamples.csv"       # one level up from training/
-OUTPUT_DIR = "checkpoints"
-BEST_DIR   = "best-model"
-SEED       = 42
 
-# Data split — must sum to ≤ 1.0; the leftover 10% is intentionally discarded
+# ── CSV path ──────────────────────────────────────────────────────────────────
+# Colab direct-upload  → "/content/mtsamples.csv"
+# Colab Google Drive   → "/content/drive/MyDrive/mtsamples.csv"
+# Local (from training/) → "../mtsamples.csv"
+CSV_PATH   = "/content/mtsamples.csv"
+
+# ── Output dirs ───────────────────────────────────────────────────────────────
+OUTPUT_DIR = "/content/checkpoints"   # intermediate checkpoints
+BEST_DIR   = "/content/best-model"    # final best model saved here
+
+# ── Hugging Face Hub ──────────────────────────────────────────────────────────
+# Set to your repo ID to push automatically after training.
+# Run `huggingface-cli login` (or use notebook_login()) before training.
+HF_REPO = "sahilo56/my-medical-summarizer"   # set None to skip push
+
+SEED = 42
+
+# ── Data split ────────────────────────────────────────────────────────────────
 SPLIT_TRAIN = 0.60
 SPLIT_VAL   = 0.15
 SPLIT_TEST  = 0.15
+# Remaining 10 % is intentionally discarded
 
-# Sequence lengths — Flan-T5-base max input is 512 tokens
-MAX_INPUT_LEN  = 512
-MAX_TARGET_LEN = 128
+# ── Sequence lengths (Flan-T5-base hard max = 512) ───────────────────────────
+MAX_INPUT_LEN  = 512   # encoder — clinical notes (truncated if longer)
+MAX_TARGET_LEN = 128   # decoder — short description
 
-# ── Hyperparameters ────────────────────────────────────────────────────────────
-# Chosen to keep the model generalised (neither overfit nor underfit):
-#   • Moderate LR + warmup avoids sharp early overfitting
-#   • Weight-decay L2 regularises the weights
-#   • Early stopping prevents training past the optimal checkpoint
-#   • Effective batch 16 (8 × grad_accum=2) gives stable gradient estimates
+# ── Preprocessing filters ─────────────────────────────────────────────────────
+MIN_TRANSCRIPTION_CHARS = 100   # discard transcriptions shorter than this
+MIN_DESCRIPTION_CHARS   = 10    # discard descriptions  shorter than this
+
+# ── Training hyperparameters ──────────────────────────────────────────────────
+# These are chosen to produce a generalised model:
+#   • LR 3e-4 + cosine schedule → smooth convergence
+#   • weight_decay 0.01         → L2 regularisation (prevents overfit)
+#   • warmup_ratio 0.06         → avoids destructively large early updates
+#   • early stopping patience=3 → halts training before the model memorises data
+#   • effective batch 16 (8×2)  → stable gradient signal
 LR             = 3e-4
 BATCH_SIZE     = 8
-GRAD_ACCUM     = 2        # effective batch = 16
-MAX_EPOCHS     = 10       # upper bound; early stopping usually fires first
+GRAD_ACCUM     = 2          # effective batch = 16
+MAX_EPOCHS     = 10         # upper bound; early stopping fires first
 WEIGHT_DECAY   = 0.01
-WARMUP_RATIO   = 0.06     # 6 % of total steps used for linear LR warm-up
-NUM_BEAMS      = 4        # beam search during evaluation/prediction
-EARLY_PATIENCE = 3        # stop after 3 epochs with no val-ROUGE improvement
+WARMUP_RATIO   = 0.06
+NUM_BEAMS      = 4          # beam search for eval generation quality
+EARLY_PATIENCE = 3          # stop if val ROUGE-1 has not improved for 3 epochs
 
-# Set to your HF repo to push the final model automatically, or leave None
-HF_REPO = None   # e.g. "sahilo56/my-medical-summarizer"
-
-# Flan-T5 task prefix
 TASK_PREFIX = "summarize medical transcription: "
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 1.  DEVICE CHECK
+# STEP 2 — DEVICE CHECK
 # ══════════════════════════════════════════════════════════════════════════════
-device = "cuda" if torch.cuda.is_available() else "cpu"
+device   = "cuda" if torch.cuda.is_available() else "cpu"
 use_fp16 = device == "cuda"
-print(f"\n{'═'*54}")
+
+print(f"\n{'═'*58}")
 print(f"  Device : {device.upper()}")
 if device == "cpu":
-    print("  WARNING: No GPU detected — training will be very slow.")
-    print("  Consider running on Google Colab (free GPU) instead.")
-print(f"{'═'*54}\n")
+    print("  ⚠  No GPU found — training will be very slow on CPU.")
+    print("     In Colab: Runtime → Change runtime type → T4 GPU")
+print(f"{'═'*58}\n")
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 2.  LOAD & CLEAN DATA
+# STEP 3 — DATA PREPROCESSING
 # ══════════════════════════════════════════════════════════════════════════════
-print("Loading mtsamples.csv …")
-df = pd.read_csv(CSV_PATH, index_col=0)
-df = df[["description", "transcription"]].dropna()
-df["description"]   = df["description"].str.strip()
-df["transcription"] = df["transcription"].str.strip()
-df = df[(df["description"] != "") & (df["transcription"] != "")]
+
+# ── 3a. Cleaning functions ────────────────────────────────────────────────────
+
+# Some mtsamples entries have a boilerplate disclaimer appended to the
+# transcription text — we strip it so the model never trains on it.
+_DISCLAIMER = re.compile(
+    r'NOTE\s*:?\s*These?\s+transcribed?\s+medical\s+transcription.*$',
+    re.IGNORECASE | re.DOTALL,
+)
+
+def clean_transcription(text: str) -> str:
+    """
+    Full cleaning pipeline for clinical transcription text.
+
+    Steps applied (in order):
+      1. Remove the mtsamples boilerplate disclaimer
+      2. Decode common HTML entities
+      3. Normalise tabs → spaces
+      4. Collapse runs of 2+ spaces to one space
+      5. Collapse 3+ consecutive blank lines to two (preserve paragraph breaks)
+      6. Strip whitespace from every line
+      7. Final strip
+    """
+    if not isinstance(text, str):
+        return ""
+
+    # 1. Boilerplate disclaimer
+    text = _DISCLAIMER.sub("", text)
+
+    # 2. HTML entities
+    text = (text
+            .replace("&amp;",  "&")
+            .replace("&lt;",   "<")
+            .replace("&gt;",   ">")
+            .replace("&nbsp;", " ")
+            .replace("&#39;",  "'")
+            .replace("&quot;", '"'))
+
+    # 3. Tabs → single space
+    text = text.replace("\t", " ")
+
+    # 4. Multiple spaces → one space (within a line)
+    text = re.sub(r"[ ]{2,}", " ", text)
+
+    # 5. More than two consecutive newlines → two
+    text = re.sub(r"\n{3,}", "\n\n", text)
+
+    # 6. Strip each line
+    text = "\n".join(line.strip() for line in text.splitlines())
+
+    # 7. Overall strip
+    return text.strip()
+
+
+def clean_description(text: str) -> str:
+    """
+    Clean the short summary / description text.
+
+    Steps:
+      1. Decode HTML entities
+      2. Collapse all whitespace variants to a single space
+      3. Strip
+    """
+    if not isinstance(text, str):
+        return ""
+
+    text = (text
+            .replace("&amp;",  "&")
+            .replace("&lt;",   "<")
+            .replace("&gt;",   ">")
+            .replace("&nbsp;", " "))
+
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
+# ── 3b. Load raw CSV ──────────────────────────────────────────────────────────
+print("═"*58)
+print("  PREPROCESSING PIPELINE")
+print("═"*58)
+
+raw_df = pd.read_csv(CSV_PATH, index_col=0)
+n_raw  = len(raw_df)
+print(f"\n  Raw CSV rows             : {n_raw}")
+
+# ── 3c. Keep only the two columns we need ─────────────────────────────────────
+df = raw_df[["description", "transcription"]].copy()
+
+# ── 3d. Drop rows where either column is entirely null ────────────────────────
+df = df.dropna(subset=["transcription"])
+n_after_drop_txn = len(df)
+
+df = df.dropna(subset=["description"])
+n_after_drop_desc = len(df)
+
+print(f"  After dropping null txn  : {n_after_drop_txn}  "
+      f"(-{n_raw - n_after_drop_txn})")
+print(f"  After dropping null desc : {n_after_drop_desc}  "
+      f"(-{n_after_drop_txn - n_after_drop_desc})")
+
+# ── 3e. Apply text cleaning ───────────────────────────────────────────────────
+df["transcription"] = df["transcription"].apply(clean_transcription)
+df["description"]   = df["description"].apply(clean_description)
+
+# ── 3f. Length filtering ──────────────────────────────────────────────────────
+# Very short transcriptions carry no clinical signal.
+# Very short descriptions cannot form a meaningful target sentence.
+mask_txn  = df["transcription"].str.len() >= MIN_TRANSCRIPTION_CHARS
+mask_desc = df["description"].str.len()   >= MIN_DESCRIPTION_CHARS
+df = df[mask_txn & mask_desc]
+n_after_len = len(df)
+
+removed_by_len = n_after_drop_desc - n_after_len
+print(f"  After length filter      : {n_after_len}  "
+      f"(-{removed_by_len} too short  "
+      f"[txn<{MIN_TRANSCRIPTION_CHARS} or desc<{MIN_DESCRIPTION_CHARS} chars])")
+
+# ── 3g. Deduplication ─────────────────────────────────────────────────────────
+# Drop rows with identical transcription text (keep first occurrence).
+df = df.drop_duplicates(subset=["transcription"], keep="first")
+n_after_dedup = len(df)
+
+removed_by_dedup = n_after_len - n_after_dedup
+print(f"  After deduplication      : {n_after_dedup}  "
+      f"(-{removed_by_dedup} duplicate transcriptions)")
+
+# ── 3h. Final shuffle ─────────────────────────────────────────────────────────
 df = df.sample(frac=1, random_state=SEED).reset_index(drop=True)
 
+print(f"\n  {'─'*52}")
+print(f"  Final clean dataset      : {n_after_dedup} rows")
+print(f"  Rows removed total       : {n_raw - n_after_dedup}  "
+      f"({(n_raw-n_after_dedup)/n_raw*100:.1f}% of raw)")
+print(f"  {'─'*52}")
+
+# ── 3i. Sample preview ────────────────────────────────────────────────────────
+print("\n  SAMPLE (first 2 rows after cleaning):")
+print("  " + "─"*52)
+for i in range(min(2, len(df))):
+    txn_preview  = df.iloc[i]["transcription"][:120].replace("\n", " ")
+    desc_preview = df.iloc[i]["description"][:80]
+    print(f"  [{i}] Description : {desc_preview}")
+    print(f"       Transcription: {txn_preview}…")
+    print()
+
+# ── 3j. Length statistics ─────────────────────────────────────────────────────
+txn_chars  = df["transcription"].str.len()
+desc_chars = df["description"].str.len()
+print(f"  Transcription length (chars): "
+      f"min={txn_chars.min()}, "
+      f"median={int(txn_chars.median())}, "
+      f"max={txn_chars.max()}")
+print(f"  Description length   (chars): "
+      f"min={desc_chars.min()}, "
+      f"median={int(desc_chars.median())}, "
+      f"max={desc_chars.max()}")
+print(f"{'═'*58}\n")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# STEP 4 — DATA SPLIT  (60 / 15 / 15 / 10)
+# ══════════════════════════════════════════════════════════════════════════════
 n        = len(df)
 n_train  = int(n * SPLIT_TRAIN)
 n_val    = int(n * SPLIT_VAL)
 n_test   = int(n * SPLIT_TEST)
-n_unused = n - n_train - n_val - n_test
+n_unused = n - n_train - n_val - n_test   # ~10 % intentionally discarded
 
 train_df = df.iloc[:n_train].reset_index(drop=True)
-val_df   = df.iloc[n_train            : n_train + n_val].reset_index(drop=True)
-test_df  = df.iloc[n_train + n_val    : n_train + n_val + n_test].reset_index(drop=True)
-# rows beyond n_train+n_val+n_test are intentionally not used
+val_df   = df.iloc[n_train           : n_train + n_val].reset_index(drop=True)
+test_df  = df.iloc[n_train + n_val   : n_train + n_val + n_test].reset_index(drop=True)
 
-print(f"\n{'─'*54}")
-print(f"  {'SPLIT':<22} {'ROWS':>8}   {'%':>6}")
-print(f"{'─'*54}")
-print(f"  {'Total (clean)':<22} {n:>8}")
-print(f"  {'Train  (60%)':<22} {n_train:>8}   {n_train/n*100:>5.1f}%")
-print(f"  {'Validation (15%)':<22} {n_val:>8}   {n_val/n*100:>5.1f}%")
-print(f"  {'Test   (15%)':<22} {n_test:>8}   {n_test/n*100:>5.1f}%")
-print(f"  {'Unused (10%)':<22} {n_unused:>8}   {n_unused/n*100:>5.1f}%")
-print(f"{'─'*54}\n")
+print(f"{'═'*58}")
+print(f"  DATA SPLIT")
+print(f"{'─'*58}")
+print(f"  {'Split':<24} {'Rows':>7}   {'Share':>6}")
+print(f"  {'─'*40}")
+print(f"  {'Total (after preprocessing)':<24} {n:>7}")
+print(f"  {'Train          (60 %)':<24} {n_train:>7}   {n_train/n*100:>5.1f} %")
+print(f"  {'Validation     (15 %)':<24} {n_val:>7}   {n_val/n*100:>5.1f} %")
+print(f"  {'Test           (15 %)':<24} {n_test:>7}   {n_test/n*100:>5.1f} %")
+print(f"  {'Unused/discarded(10 %)':<24} {n_unused:>7}   {n_unused/n*100:>5.1f} %")
+print(f"{'═'*58}\n")
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 3.  TOKENISE
+# STEP 5 — TOKENISATION
 # ══════════════════════════════════════════════════════════════════════════════
 print("Loading tokeniser …")
 tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
 
-def preprocess(batch):
+def tokenise_batch(batch):
+    """
+    Encode (input, target) pairs for Seq2Seq training.
+
+    Input  : TASK_PREFIX + transcription   (truncated to MAX_INPUT_LEN)
+    Target : description                   (truncated to MAX_TARGET_LEN)
+
+    Note: `text_target=` is the current transformers API for encoding labels.
+    The older `tokenizer.as_target_tokenizer()` context manager is deprecated
+    and will raise warnings/errors on newer library versions.
+    """
     inputs  = [TASK_PREFIX + t for t in batch["transcription"]]
     targets = batch["description"]
 
@@ -123,57 +338,64 @@ def preprocess(batch):
         truncation=True,
         padding=False,
     )
-    with tokenizer.as_target_tokenizer():
-        labels = tokenizer(
-            targets,
-            max_length=MAX_TARGET_LEN,
-            truncation=True,
-            padding=False,
-        )
-    model_inputs["labels"] = labels["input_ids"]
+
+    # `text_target` encodes into the decoder vocabulary (same tokeniser for T5)
+    label_encodings = tokenizer(
+        text_target=targets,
+        max_length=MAX_TARGET_LEN,
+        truncation=True,
+        padding=False,
+    )
+    model_inputs["labels"] = label_encodings["input_ids"]
     return model_inputs
 
-def make_hf_dataset(frame):
-    ds = Dataset.from_pandas(frame[["transcription", "description"]])
-    return ds.map(preprocess, batched=True, remove_columns=ds.column_names,
-                  desc="Tokenising")
 
-print("Tokenising splits …")
+def build_dataset(frame: pd.DataFrame) -> Dataset:
+    ds = Dataset.from_pandas(frame[["transcription", "description"]])
+    return ds.map(
+        tokenise_batch,
+        batched=True,
+        remove_columns=ds.column_names,
+        desc="Tokenising",
+    )
+
+
+print("Tokenising all splits …")
 dataset = DatasetDict({
-    "train":      make_hf_dataset(train_df),
-    "validation": make_hf_dataset(val_df),
-    "test":       make_hf_dataset(test_df),
+    "train":      build_dataset(train_df),
+    "validation": build_dataset(val_df),
+    "test":       build_dataset(test_df),
 })
 print(dataset)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 4.  MODEL + COLLATOR
+# STEP 6 — MODEL + DATA COLLATOR
 # ══════════════════════════════════════════════════════════════════════════════
 print(f"\nLoading {MODEL_ID} …")
-model = AutoModelForSeq2SeqLM.from_pretrained(MODEL_ID)
+model    = AutoModelForSeq2SeqLM.from_pretrained(MODEL_ID)
 n_params = sum(p.numel() for p in model.parameters()) / 1e6
-print(f"Parameters: {n_params:.0f}M")
+print(f"Parameters : {n_params:.0f} M")
 
 collator = DataCollatorForSeq2Seq(
     tokenizer,
     model=model,
-    label_pad_token_id=-100,
+    label_pad_token_id=-100,              # -100 is ignored by the loss function
     pad_to_multiple_of=8 if use_fp16 else None,
 )
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 5.  ROUGE METRIC
+# STEP 7 — ROUGE EVALUATION METRIC
 # ══════════════════════════════════════════════════════════════════════════════
 rouge_metric = evaluate.load("rouge")
 
 def compute_metrics(eval_preds):
     preds, labels = eval_preds
 
-    # Some transformers versions return a tuple (preds, decoder_hidden, ...)
+    # Older transformers returns a (preds, decoder_states) tuple
     if isinstance(preds, tuple):
         preds = preds[0]
 
-    # -100 is the ignore-index; replace before decoding
+    # Replace the -100 padding sentinel before decoding
     preds  = np.where(preds  != -100, preds,  tokenizer.pad_token_id)
     labels = np.where(labels != -100, labels, tokenizer.pad_token_id)
 
@@ -188,67 +410,65 @@ def compute_metrics(eval_preds):
         references=decoded_labels,
         use_stemmer=True,
     )
-    # Return as percentages
     return {k: round(v * 100, 2) for k, v in scores.items()}
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 6.  TRAINING ARGUMENTS
+# STEP 8 — TRAINING ARGUMENTS
 # ══════════════════════════════════════════════════════════════════════════════
 steps_per_epoch = max(1, n_train // (BATCH_SIZE * GRAD_ACCUM))
 total_steps     = steps_per_epoch * MAX_EPOCHS
 
-print(f"\nTraining plan:")
-print(f"  Steps / epoch  : {steps_per_epoch}")
-print(f"  Max total steps: {total_steps}")
-print(f"  Warmup steps   : {int(total_steps * WARMUP_RATIO)}")
+print(f"\n  Steps / epoch   : {steps_per_epoch}")
+print(f"  Max total steps : {total_steps}")
+print(f"  Warmup steps    : {int(total_steps * WARMUP_RATIO)}\n")
 
-args = Seq2SeqTrainingArguments(
+training_args = Seq2SeqTrainingArguments(
     output_dir=OUTPUT_DIR,
 
-    # Epochs & batches
+    # ── Epochs & batches ──────────────────────────────────────────────────────
     num_train_epochs=MAX_EPOCHS,
     per_device_train_batch_size=BATCH_SIZE,
     per_device_eval_batch_size=BATCH_SIZE,
     gradient_accumulation_steps=GRAD_ACCUM,
 
-    # Optimiser — weight_decay is the L2 regularisation term (prevents overfit)
+    # ── Optimiser (generalisation settings) ───────────────────────────────────
     learning_rate=LR,
-    weight_decay=WEIGHT_DECAY,
+    weight_decay=WEIGHT_DECAY,       # L2 regularisation
     warmup_ratio=WARMUP_RATIO,
-    lr_scheduler_type="cosine",   # cosine decay generalises better than linear
+    lr_scheduler_type="cosine",      # smooth decay; generalises better than step
 
-    # Evaluation & checkpointing
-    evaluation_strategy="epoch",
+    # ── Evaluation & checkpointing ────────────────────────────────────────────
+    eval_strategy="epoch",
     save_strategy="epoch",
     load_best_model_at_end=True,
     metric_for_best_model="rouge1",
     greater_is_better=True,
-    save_total_limit=2,           # keep only the 2 best checkpoints on disk
+    save_total_limit=2,              # only keep the 2 best checkpoints
 
-    # Generation (used during eval)
+    # ── Seq2Seq generation ────────────────────────────────────────────────────
     predict_with_generate=True,
     generation_max_length=MAX_TARGET_LEN,
     generation_num_beams=NUM_BEAMS,
 
-    # Mixed precision
-    fp16=use_fp16,
+    # ── Mixed precision ───────────────────────────────────────────────────────
+    fp16=use_fp16,                   # auto-enabled on GPU, off on CPU
 
-    # Misc
+    # ── Misc ──────────────────────────────────────────────────────────────────
     seed=SEED,
     logging_steps=50,
     report_to="none",
 
-    # Hub (optional)
-    push_to_hub=(HF_REPO is not None),
-    hub_model_id=HF_REPO if HF_REPO else "",
+    # ── Hub push (set HF_REPO above to enable) ────────────────────────────────
+    push_to_hub=bool(HF_REPO),
+    hub_model_id=HF_REPO or "",
 )
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 7.  TRAINER
+# STEP 9 — TRAINER
 # ══════════════════════════════════════════════════════════════════════════════
 trainer = Seq2SeqTrainer(
     model=model,
-    args=args,
+    args=training_args,
     train_dataset=dataset["train"],
     eval_dataset=dataset["validation"],
     tokenizer=tokenizer,
@@ -260,75 +480,87 @@ trainer = Seq2SeqTrainer(
 )
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 8.  TRAIN
+# STEP 10 — TRAIN
 # ══════════════════════════════════════════════════════════════════════════════
-print("\n" + "═"*54)
-print("  TRAINING STARTED")
-print("═"*54)
+print("═"*58)
+print("  TRAINING  —  watch eval/rouge1 each epoch")
+print("═"*58)
 trainer.train()
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 9.  FINAL EVALUATION
+# STEP 11 — FINAL EVALUATION
 # ══════════════════════════════════════════════════════════════════════════════
-print("\n" + "═"*54)
-print("  EVALUATING ON TEST SET (held-out data)")
-print("═"*54)
-test_out = trainer.predict(
-    dataset["test"],
-    metric_key_prefix="test",
-)
-test_m = test_out.metrics
+print("\n" + "═"*58)
+print("  EVALUATING ON HELD-OUT TEST SET")
+print("═"*58)
 
+# Test set
+test_out = trainer.predict(dataset["test"], metric_key_prefix="test")
+test_m   = test_out.metrics
+
+# Validation set (best checkpoint, loaded automatically)
 val_out = trainer.evaluate(dataset["validation"])
 
-train_out = trainer.evaluate(dataset["train"], metric_key_prefix="train")
+# Train-set sample (300 rows) — gives a quick overfit diagnostic without
+# running inference over all 3000 training examples (that takes too long).
+train_sample = dataset["train"].select(range(min(300, len(dataset["train"]))))
+train_out    = trainer.evaluate(train_sample, metric_key_prefix="train")
 
-# ── Generalisation diagnostics ────────────────────────────────────────────────
+# ── Generalisation verdict ────────────────────────────────────────────────────
 train_r1 = train_out.get("train_rouge1", 0)
-val_r1   = val_out.get("eval_rouge1",  0)
-test_r1  = test_m.get("test_rouge1",  0)
+val_r1   = val_out.get("eval_rouge1",   0)
+test_r1  = test_m.get("test_rouge1",    0)
 gap      = train_r1 - val_r1
 
 if gap > 10:
-    verdict = "⚠  POSSIBLE OVERFIT  — train >> val"
+    verdict = "⚠  OVERFIT  — train ROUGE >> val ROUGE (gap > 10 pts)"
 elif val_r1 < 15:
-    verdict = "⚠  POSSIBLE UNDERFIT — scores very low"
+    verdict = "⚠  UNDERFIT — all ROUGE scores are very low (< 15)"
 else:
-    verdict = "✓  GENERALISED       — train ≈ val ≈ test"
+    verdict = "✓  GENERALISED — train ≈ val ≈ test"
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 10.  RESULTS SUMMARY
+# STEP 12 — RESULTS TABLE
 # ══════════════════════════════════════════════════════════════════════════════
-print(f"\n{'═'*54}")
+print(f"\n{'═'*58}")
+print(f"  FINAL RESULTS SUMMARY")
+print(f"{'─'*58}")
 print(f"  DATA SPLIT")
-print(f"{'─'*54}")
-print(f"  {'Total (clean)':<22} {n:>8} rows")
-print(f"  {'Train  (60%)':<22} {n_train:>8} rows   ({n_train/n*100:.1f}%)")
-print(f"  {'Validation (15%)':<22} {n_val:>8} rows   ({n_val/n*100:.1f}%)")
-print(f"  {'Test   (15%)':<22} {n_test:>8} rows   ({n_test/n*100:.1f}%)")
-print(f"  {'Unused (10%)':<22} {n_unused:>8} rows   ({n_unused/n*100:.1f}%)")
-print(f"{'─'*54}")
-print(f"  ROUGE ACCURACY  (higher = better, max 100)")
-print(f"{'─'*54}")
-print(f"  {'Metric':<14} {'Train':>8} {'Val':>8} {'Test':>8}")
-print(f"  {'─'*42}")
+print(f"  {'─'*52}")
+print(f"  {'Total (preprocessed)':<28} {n:>6} rows")
+print(f"  {'Train        (60 %)':<28} {n_train:>6} rows  ({n_train/n*100:.1f}%)")
+print(f"  {'Validation   (15 %)':<28} {n_val:>6} rows  ({n_val/n*100:.1f}%)")
+print(f"  {'Test         (15 %)':<28} {n_test:>6} rows  ({n_test/n*100:.1f}%)")
+print(f"  {'Discarded    (10 %)':<28} {n_unused:>6} rows  ({n_unused/n*100:.1f}%)")
+print(f"{'─'*58}")
+print(f"  ROUGE ACCURACY  (% — higher is better, max = 100)")
+print(f"  {'─'*52}")
+print(f"  {'Metric':<14}  {'Train*':>9}  {'Val':>9}  {'Test':>9}")
+print(f"  {'─'*52}")
 for key in ("rouge1", "rouge2", "rougeL", "rougeLsum"):
     tr = train_out.get(f"train_{key}", 0)
-    vl = val_out.get(f"eval_{key}",  0)
-    te = test_m.get(f"test_{key}",   0)
-    print(f"  {key.upper():<14} {tr:>7.2f}% {vl:>7.2f}% {te:>7.2f}%")
-print(f"{'─'*54}")
-print(f"  Generalisation: {verdict}")
-print(f"  Train−Val gap on ROUGE-1: {gap:+.2f}%")
-print(f"{'═'*54}\n")
+    vl = val_out.get(f"eval_{key}",   0)
+    te = test_m.get(f"test_{key}",    0)
+    print(f"  {key.upper():<14}  {tr:>8.2f}%  {vl:>8.2f}%  {te:>8.2f}%")
+print(f"  {'─'*52}")
+print(f"  * Train ROUGE measured on a 300-row subsample (for speed)")
+print(f"{'─'*58}")
+print(f"  Generalisation : {verdict}")
+print(f"  Train−Val gap  : {gap:+.2f} pts on ROUGE-1")
+print(f"{'═'*58}\n")
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 11.  SAVE
+# STEP 13 — SAVE & PUSH TO HUB
 # ══════════════════════════════════════════════════════════════════════════════
 trainer.save_model(BEST_DIR)
 tokenizer.save_pretrained(BEST_DIR)
-print(f"Best model saved to  → training/{BEST_DIR}/")
+print(f"Best model saved → {BEST_DIR}/")
 
 if HF_REPO:
-    trainer.push_to_hub(commit_message="Fine-tuned flan-t5-base on mtsamples")
-    print(f"Model pushed to Hub  → {HF_REPO}")
+    # Make sure you ran: huggingface-cli login   (or notebook_login() in Colab)
+    # from huggingface_hub import notebook_login; notebook_login()
+    trainer.push_to_hub(commit_message="Fine-tuned flan-t5-base on mtsamples v2")
+    print(f"Model pushed     → https://huggingface.co/{HF_REPO}")
+else:
+    print("HF_REPO is None — skipping Hub push.")
+    print(f"To push manually: trainer.push_to_hub() or upload {BEST_DIR}/ via the Hub UI.")
