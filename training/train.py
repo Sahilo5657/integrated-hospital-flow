@@ -77,7 +77,7 @@ BEST_DIR   = "/content/best-model"    # final best model saved here
 # ── Hugging Face Hub ──────────────────────────────────────────────────────────
 # Set to your repo ID to push automatically after training.
 # Run `huggingface-cli login` (or use notebook_login()) before training.
-HF_REPO = "sahilo56/my-medical-summarizer"   # set None to skip push
+HF_REPO = None   # set to "username/repo-name" to push to HuggingFace Hub
 
 SEED = 42
 
@@ -458,9 +458,8 @@ training_args = Seq2SeqTrainingArguments(
     logging_steps=50,
     report_to="none",
 
-    # ── Hub push (set HF_REPO above to enable) ────────────────────────────────
-    push_to_hub=bool(HF_REPO),
-    hub_model_id=HF_REPO or "",
+    # Hub push disabled
+    push_to_hub=False,
 )
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -556,11 +555,4 @@ trainer.save_model(BEST_DIR)
 tokenizer.save_pretrained(BEST_DIR)
 print(f"Best model saved → {BEST_DIR}/")
 
-if HF_REPO:
-    # Make sure you ran: huggingface-cli login   (or notebook_login() in Colab)
-    # from huggingface_hub import notebook_login; notebook_login()
-    trainer.push_to_hub(commit_message="Fine-tuned flan-t5-base on mtsamples v2")
-    print(f"Model pushed     → https://huggingface.co/{HF_REPO}")
-else:
-    print("HF_REPO is None — skipping Hub push.")
-    print(f"To push manually: trainer.push_to_hub() or upload {BEST_DIR}/ via the Hub UI.")
+print("Hub push disabled — take a screenshot of the results table above.")
