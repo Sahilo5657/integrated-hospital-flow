@@ -90,14 +90,23 @@ class _DoctorPatientRecordScreenState extends State<DoctorPatientRecordScreen> {
           // 2. View History (StreamBuilder)
           Expanded(
             child: StreamBuilder<QuerySnapshot>(
+              // Query by patientName — works for both linked and NFC-only patients,
+              // and avoids needing a composite Firestore index.
               stream: FirebaseFirestore.instance
                   .collection('encounters')
-                  .where('patientId', isEqualTo: widget.patientId)
-                  .orderBy('timestamp', descending: true)
+                  .where('patientName', isEqualTo: widget.patientName)
                   .snapshots(),
               builder: (context, snapshot) {
                 if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
-                final docs = snapshot.data!.docs;
+                // Sort newest-first in memory
+                final docs = [...snapshot.data!.docs]..sort((a, b) {
+                    final ta = (a.data() as Map)['timestamp'];
+                    final tb = (b.data() as Map)['timestamp'];
+                    if (ta is Timestamp && tb is Timestamp) {
+                      return tb.millisecondsSinceEpoch.compareTo(ta.millisecondsSinceEpoch);
+                    }
+                    return 0;
+                  });
                 if (docs.isEmpty) return const Center(child: Text("No history available."));
 
                 return ListView.builder(

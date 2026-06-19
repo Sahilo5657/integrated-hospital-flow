@@ -34,13 +34,30 @@ class _StaffHomeState extends State<StaffHome> {
           .collection('queues')
           .where('doctorId', isEqualTo: 'sahilo5657@gmail.com')
           .get();
+
       if (snapshot.docs.isEmpty) return 1;
-      int maxToken = 0;
+
+      final today = DateTime.now();
+      int maxTokenToday = 0;
+      bool hasAnyTodayEntry = false;
+
       for (var doc in snapshot.docs) {
-        final t = doc['tokenNo'] as int? ?? 0;
-        if (t > maxToken) maxToken = t;
+        final ts = doc['timestamp'];
+        if (ts is Timestamp) {
+          final entryDate = ts.toDate();
+          final sameDay = entryDate.year == today.year &&
+              entryDate.month == today.month &&
+              entryDate.day == today.day;
+          if (sameDay) {
+            hasAnyTodayEntry = true;
+            final t = doc['tokenNo'] as int? ?? 0;
+            if (t > maxTokenToday) maxTokenToday = t;
+          }
+        }
       }
-      return maxToken + 1;
+
+      // If no entries from today, reset to 1 (new day)
+      return hasAnyTodayEntry ? maxTokenToday + 1 : 1;
     } catch (e) {
       return 1;
     }
@@ -63,17 +80,18 @@ class _StaffHomeState extends State<StaffHome> {
         final name = cardData['patientName'] ?? 'Unknown Patient';
         final linkedUid = cardData['linkedUid'] ?? '';
 
+        // Check both 'waiting' and 'serving' to prevent double entry
         final existingQueueCheck = await FirebaseFirestore.instance
             .collection('queues')
             .where('doctorId', isEqualTo: 'sahilo5657@gmail.com')
             .where('patientName', isEqualTo: name)
-            .where('status', isEqualTo: 'waiting')
+            .where('status', whereIn: ['waiting', 'serving'])
             .get();
 
         if (existingQueueCheck.docs.isNotEmpty) {
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text("$name is already in line!"), backgroundColor: Colors.orange),
+              SnackBar(content: Text("$name is already in the queue!"), backgroundColor: Colors.orange),
             );
             _cardIdController.clear();
           }

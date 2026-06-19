@@ -74,11 +74,10 @@ class WallDisplayScreen extends StatelessWidget {
                         if (waiting.isEmpty)
                           const Text("No upcoming patients.", style: TextStyle(fontSize: 18))
                         else
-                          ...waiting.take(5).toList().asMap().entries.map((entry) {
-                            int index = entry.key;
-                            QueueItem n = entry.value;
-                            // Explicit ETA calculation: (index + 1) * 10 mins
-                            int eta = (index + 1) * 10;
+                          ...waiting.take(5).map((n) {
+                            final etaText = n.etaMins > 0
+                                ? "Est. Wait: ${n.etaMins} min"
+                                : "Wait time unavailable";
 
                             return Padding(
                               padding: const EdgeInsets.only(bottom: 12),
@@ -87,7 +86,7 @@ class WallDisplayScreen extends StatelessWidget {
                                   Container(
                                     padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                                     decoration: BoxDecoration(
-                                      color: Theme.of(context).colorScheme.primary.withOpacity(.10),
+                                      color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.10),
                                       borderRadius: BorderRadius.circular(14),
                                     ),
                                     child: Text("#${n.tokenNo}", style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900)),
@@ -102,7 +101,7 @@ class WallDisplayScreen extends StatelessWidget {
                                           style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
                                         ),
                                         Text(
-                                          "Estimated Wait: $eta mins",
+                                          etaText,
                                           style: TextStyle(
                                             fontSize: 14,
                                             fontWeight: FontWeight.w600,

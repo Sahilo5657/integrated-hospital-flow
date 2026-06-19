@@ -230,13 +230,17 @@ class _DoctorHomeState extends State<DoctorHome> {
                                                           'sahilo5657@gmail.com')
                                                   .where('status',
                                                       isEqualTo: 'waiting')
-                                                  .limit(1)
                                                   .get();
 
                                           if (waitingQuery.docs.isNotEmpty) {
-                                            batch.update(
-                                                waitingQuery.docs.first.reference,
-                                                {
+                                            // Sort in memory to get the lowest token number
+                                            final nextDoc = waitingQuery.docs
+                                                .reduce((a, b) =>
+                                                    (a['tokenNo'] as int? ?? 0) <=
+                                                            (b['tokenNo'] as int? ?? 0)
+                                                        ? a
+                                                        : b);
+                                            batch.update(nextDoc.reference, {
                                                   'status': 'serving',
                                                   'queueStatus': 'Serving',
                                                 });
