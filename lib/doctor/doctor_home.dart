@@ -66,19 +66,29 @@ class _DoctorHomeState extends State<DoctorHome> {
 
           final doctorName = profileSnapshot.data?.name ?? 'Doctor';
 
+          // Single stream — no composite index needed. Filter in-memory below.
           return StreamBuilder<QuerySnapshot>(
             stream: FirebaseFirestore.instance
                 .collection('queues')
                 .where('doctorId', isEqualTo: 'sahilo5657@gmail.com')
-                .where('status', isEqualTo: 'serving')
                 .snapshots(),
-            builder: (context, servingSnapshot) {
-              final servingDoc = (servingSnapshot.data?.docs.isNotEmpty ?? false)
-                  ? servingSnapshot.data!.docs.first
-                  : null;
+            builder: (context, allQueuesSnapshot) {
+              final allDocs = allQueuesSnapshot.data?.docs ?? [];
 
-              final String activePatientName =
-                  servingDoc != null ? servingDoc['patientName'] : "No Active Patient";
+              final servingDocs = allDocs
+                  .where((d) => (d['status'] ?? '') == 'serving')
+                  .toList();
+              final waitingDocs = allDocs
+                  .where((d) => (d['status'] ?? '') == 'waiting')
+                  .toList();
+
+              final servingDoc =
+                  servingDocs.isNotEmpty ? servingDocs.first : null;
+              final waitingCount = waitingDocs.length;
+
+              final String activePatientName = servingDoc != null
+                  ? servingDoc['patientName']
+                  : "No Active Patient";
               final String activePatientId =
                   servingDoc != null ? (servingDoc['patientId'] ?? '') : '';
 
@@ -86,7 +96,8 @@ class _DoctorHomeState extends State<DoctorHome> {
                 children: [
                   Text(
                     "Welcome, Dr. $doctorName",
-                    style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w900),
+                    style: const TextStyle(
+                        fontSize: 22, fontWeight: FontWeight.w900),
                   ),
                   const SizedBox(height: 6),
                   const Text(
@@ -98,27 +109,20 @@ class _DoctorHomeState extends State<DoctorHome> {
                       Expanded(
                         child: UICard(
                           title: "Now Serving",
-                          value: servingDoc == null ? "—" : "#${servingDoc['tokenNo']}",
+                          value: servingDoc == null
+                              ? "—"
+                              : "#${servingDoc['tokenNo']}",
                           icon: Icons.campaign_outlined,
                           subtitle: activePatientName,
                         ),
                       ),
                       const SizedBox(width: 12),
                       Expanded(
-                        child: StreamBuilder<QuerySnapshot>(
-                          stream: FirebaseFirestore.instance
-                              .collection('queues')
-                              .where('doctorId', isEqualTo: 'sahilo5657@gmail.com')
-                              .where('status', isEqualTo: 'waiting')
-                              .snapshots(),
-                          builder: (context, waitSnap) {
-                            return UICard(
-                              title: "Waiting",
-                              value: "${waitSnap.data?.docs.length ?? 0}",
-                              icon: Icons.people_alt_outlined,
-                              subtitle: "Patients in queue",
-                            );
-                          },
+                        child: UICard(
+                          title: "Waiting",
+                          value: "$waitingCount",
+                          icon: Icons.people_alt_outlined,
+                          subtitle: "Patients in queue",
                         ),
                       ),
                     ],
@@ -144,7 +148,8 @@ class _DoctorHomeState extends State<DoctorHome> {
                                 child: Text(
                                   "Active Checkup: $activePatientName",
                                   style: const TextStyle(
-                                      fontSize: 16, fontWeight: FontWeight.bold),
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.bold),
                                 ),
                               ),
                             ],
@@ -160,8 +165,8 @@ class _DoctorHomeState extends State<DoctorHome> {
                                   : "Click 'Call Next' to activate a patient slot before recording notes.",
                               border: const OutlineInputBorder(),
                               focusedBorder: const OutlineInputBorder(
-                                  borderSide:
-                                      BorderSide(color: Colors.blueGrey, width: 2)),
+                                  borderSide: BorderSide(
+                                      color: Colors.blueGrey, width: 2)),
                               filled: true,
                               fillColor: servingDoc != null
                                   ? Colors.white
@@ -184,10 +189,12 @@ class _DoctorHomeState extends State<DoctorHome> {
                             padding: EdgeInsets.symmetric(vertical: 16.0),
                             child: Column(
                               children: [
-                                CircularProgressIndicator(color: Colors.blueGrey),
+                                CircularProgressIndicator(
+                                    color: Colors.blueGrey),
                                 SizedBox(height: 8),
                                 Text("Generating AI summary...",
-                                    style: TextStyle(color: Colors.blueGrey)),
+                                    style:
+                                        TextStyle(color: Colors.blueGrey)),
                               ],
                             ),
                           ),
@@ -198,56 +205,75 @@ class _DoctorHomeState extends State<DoctorHome> {
                             Expanded(
                               child: FilledButton.icon(
                                 style: FilledButton.styleFrom(
-                                    backgroundColor: Colors.blueGrey.shade700),
+                                    backgroundColor:
+                                        Colors.blueGrey.shade700),
                                 onPressed: _isProcessingAI
                                     ? null
                                     : () async {
+                                        final messenger =
+                                            ScaffoldMessenger.of(context);
                                         try {
-                                          final servingQuery =
+                                          // Single query — no composite index
+                                          final snapshot =
                                               await FirebaseFirestore.instance
                                                   .collection('queues')
                                                   .where('doctorId',
                                                       isEqualTo:
                                                           'sahilo5657@gmail.com')
-                                                  .where('status',
-                                                      isEqualTo: 'serving')
                                                   .get();
 
-                                          final batch =
-                                              FirebaseFirestore.instance.batch();
-                                          for (var doc in servingQuery.docs) {
-                                            batch.update(doc.reference, {
-                                              'status': 'done',
-                                              'queueStatus': 'Done',
-                                            });
+                                          final batch = FirebaseFirestore
+                                              .instance
+                                              .batch();
+
+                                          // Mark all currently serving as done
+                                          for (var doc in snapshot.docs) {
+                                            if ((doc['status'] ?? '') ==
+                                                'serving') {
+                                              batch.update(doc.reference, {
+                                                'status': 'done',
+                                                'queueStatus': 'Done',
+                                              });
+                                            }
                                           }
 
-                                          final waitingQuery =
-                                              await FirebaseFirestore.instance
-                                                  .collection('queues')
-                                                  .where('doctorId',
-                                                      isEqualTo:
-                                                          'sahilo5657@gmail.com')
-                                                  .where('status',
-                                                      isEqualTo: 'waiting')
-                                                  .get();
+                                          // Find next waiting patient by lowest tokenNo
+                                          final waitingList = snapshot.docs
+                                              .where((d) =>
+                                                  (d['status'] ?? '') ==
+                                                  'waiting')
+                                              .toList();
 
-                                          if (waitingQuery.docs.isNotEmpty) {
-                                            // Sort in memory to get the lowest token number
-                                            final nextDoc = waitingQuery.docs
-                                                .reduce((a, b) =>
-                                                    (a['tokenNo'] as int? ?? 0) <=
-                                                            (b['tokenNo'] as int? ?? 0)
-                                                        ? a
-                                                        : b);
-                                            batch.update(nextDoc.reference, {
+                                          if (waitingList.isNotEmpty) {
+                                            waitingList.sort((a, b) =>
+                                                (a['tokenNo'] as int? ?? 0)
+                                                    .compareTo(b['tokenNo']
+                                                            as int? ??
+                                                        0));
+                                            batch.update(
+                                                waitingList.first.reference,
+                                                {
                                                   'status': 'serving',
                                                   'queueStatus': 'Serving',
                                                 });
                                             _clinicalNotesController.clear();
+                                          } else {
+                                            messenger.showSnackBar(
+                                              const SnackBar(
+                                                  content: Text(
+                                                      "No more patients waiting.")),
+                                            );
                                           }
+
                                           await batch.commit();
-                                        } catch (_) {}
+                                        } catch (e) {
+                                          messenger.showSnackBar(
+                                            SnackBar(
+                                              content: Text("Error: $e"),
+                                              backgroundColor: Colors.red,
+                                            ),
+                                          );
+                                        }
                                       },
                                 icon: const Icon(Icons.skip_next),
                                 label: const Text("Call Next"),
@@ -258,93 +284,104 @@ class _DoctorHomeState extends State<DoctorHome> {
                               child: FilledButton.icon(
                                 style: FilledButton.styleFrom(
                                     backgroundColor: Colors.green.shade700),
-                                onPressed: (servingDoc == null || _isProcessingAI)
-                                    ? null
-                                    : () async {
-                                        final String enteredNotes =
-                                            _clinicalNotesController.text.trim();
-                                        if (enteredNotes.isEmpty) {
-                                          ScaffoldMessenger.of(context)
-                                              .showSnackBar(
-                                            const SnackBar(
-                                              content: Text(
-                                                  "Please enter clinical notes before completing the visit."),
-                                              backgroundColor: Colors.orange,
-                                            ),
-                                          );
-                                          return;
-                                        }
+                                onPressed:
+                                    (servingDoc == null || _isProcessingAI)
+                                        ? null
+                                        : () async {
+                                            final String enteredNotes =
+                                                _clinicalNotesController.text
+                                                    .trim();
+                                            if (enteredNotes.isEmpty) {
+                                              ScaffoldMessenger.of(context)
+                                                  .showSnackBar(
+                                                const SnackBar(
+                                                  content: Text(
+                                                      "Please enter clinical notes before completing the visit."),
+                                                  backgroundColor:
+                                                      Colors.orange,
+                                                ),
+                                              );
+                                              return;
+                                            }
 
-                                        setState(
-                                            () => _isProcessingAI = true);
+                                            setState(
+                                                () => _isProcessingAI = true);
 
-                                        final messenger =
-                                            ScaffoldMessenger.of(context);
+                                            final messenger =
+                                                ScaffoldMessenger.of(context);
 
-                                        try {
-                                          // 1. Save encounter to Firestore
-                                          final encounterRef =
-                                              FirebaseFirestore.instance
-                                                  .collection('encounters')
-                                                  .doc();
-                                          await encounterRef.set({
-                                            'encounterId': encounterRef.id,
-                                            'patientId': activePatientId,
-                                            'patientName': activePatientName,
-                                            'doctorId': 'sahilo5657@gmail.com',
-                                            'timestamp':
-                                                FieldValue.serverTimestamp(),
-                                            'rawNotes': enteredNotes,
-                                          });
+                                            try {
+                                              // 1. Save encounter
+                                              final encounterRef =
+                                                  FirebaseFirestore.instance
+                                                      .collection('encounters')
+                                                      .doc();
+                                              await encounterRef.set({
+                                                'encounterId': encounterRef.id,
+                                                'patientId': activePatientId,
+                                                'patientName':
+                                                    activePatientName,
+                                                'doctorId':
+                                                    'sahilo5657@gmail.com',
+                                                'timestamp': FieldValue
+                                                    .serverTimestamp(),
+                                                'rawNotes': enteredNotes,
+                                              });
 
-                                          // 2. Call real AI summary service
-                                          String aiSummary;
-                                          try {
-                                            aiSummary = await AISummaryService()
-                                                .getSummary(
-                                                    encounterRef.id, enteredNotes);
-                                          } catch (_) {
-                                            aiSummary =
-                                                "Summary generation failed. Please try again from the queue screen.";
-                                          }
+                                              // 2. Call AI summary
+                                              String aiSummary;
+                                              try {
+                                                aiSummary =
+                                                    await AISummaryService()
+                                                        .getSummary(
+                                                            encounterRef.id,
+                                                            enteredNotes);
+                                              } catch (_) {
+                                                aiSummary =
+                                                    "Summary generation failed. Please try again from the queue screen.";
+                                              }
 
-                                          // 3. Update encounter with AI summary
-                                          await encounterRef
-                                              .update({'aiSummary': aiSummary});
+                                              // 3. Persist AI summary
+                                              await encounterRef.update(
+                                                  {'aiSummary': aiSummary});
 
-                                          // 4. Mark patient as done
-                                          await servingDoc.reference.update({
-                                            'status': 'done',
-                                            'queueStatus': 'Done',
-                                          });
+                                              // 4. Mark patient done
+                                              await servingDoc.reference
+                                                  .update({
+                                                'status': 'done',
+                                                'queueStatus': 'Done',
+                                              });
 
-                                          _clinicalNotesController.clear();
+                                              _clinicalNotesController.clear();
 
-                                          if (mounted) {
-                                            messenger.showSnackBar(
-                                              SnackBar(
-                                                content: Text(
-                                                    "Visit complete! AI summary saved for $activePatientName."),
-                                                backgroundColor: Colors.green,
-                                              ),
-                                            );
-                                          }
-                                        } catch (e) {
-                                          if (mounted) {
-                                            messenger.showSnackBar(
-                                              SnackBar(
-                                                content: Text("Error: $e"),
-                                                backgroundColor: Colors.red,
-                                              ),
-                                            );
-                                          }
-                                        }
+                                              if (mounted) {
+                                                messenger.showSnackBar(
+                                                  SnackBar(
+                                                    content: Text(
+                                                        "Visit complete! AI summary saved for $activePatientName."),
+                                                    backgroundColor:
+                                                        Colors.green,
+                                                  ),
+                                                );
+                                              }
+                                            } catch (e) {
+                                              if (mounted) {
+                                                messenger.showSnackBar(
+                                                  SnackBar(
+                                                    content:
+                                                        Text("Error: $e"),
+                                                    backgroundColor:
+                                                        Colors.red,
+                                                  ),
+                                                );
+                                              }
+                                            }
 
-                                        if (mounted) {
-                                          setState(
-                                              () => _isProcessingAI = false);
-                                        }
-                                      },
+                                            if (mounted) {
+                                              setState(() =>
+                                                  _isProcessingAI = false);
+                                            }
+                                          },
                                 icon: const Icon(Icons.check_circle_outline),
                                 label: const Text("Complete Visit"),
                               ),

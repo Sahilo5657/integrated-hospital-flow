@@ -78,11 +78,12 @@ class _PatientHomeState extends State<PatientHome> {
       child: ListView(
         children: [
           // ── Live Queue Status ──
+          // Single where clause avoids composite index requirement.
+          // Position in line is calculated in-memory from all waiting docs.
           StreamBuilder<QuerySnapshot>(
             stream: FirebaseFirestore.instance
                 .collection('queues')
                 .where('doctorId', isEqualTo: 'sahilo5657@gmail.com')
-                .where('patientName', isEqualTo: _patientName)
                 .snapshots(),
             builder: (context, snapshot) {
               if (snapshot.connectionState == ConnectionState.waiting) {
@@ -94,13 +95,17 @@ class _PatientHomeState extends State<PatientHome> {
                 );
               }
 
-              final activeDocs = snapshot.data?.docs.where((doc) {
-                    final status = doc.get('status') ?? '';
-                    return status == 'waiting' || status == 'serving';
-                  }).toList() ??
-                  [];
+              final allDocs = snapshot.data?.docs ?? [];
 
-              if (activeDocs.isEmpty) {
+              // Find this patient's own active entry
+              final myActiveDocs = allDocs.where((doc) {
+                final status = (doc.get('status') ?? '') as String;
+                final name = (doc.get('patientName') ?? '') as String;
+                return (status == 'waiting' || status == 'serving') &&
+                    name == _patientName;
+              }).toList();
+
+              if (myActiveDocs.isEmpty) {
                 return Padding(
                   padding: const EdgeInsets.symmetric(vertical: 32.0),
                   child: Column(
@@ -125,12 +130,26 @@ class _PatientHomeState extends State<PatientHome> {
               }
 
               final ticket =
-                  activeDocs.first.data() as Map<String, dynamic>;
+                  myActiveDocs.first.data() as Map<String, dynamic>;
               final int tokenNo = ticket['tokenNo'] ?? 0;
-              final String queueStatus =
-                  ticket['queueStatus'] ?? 'Waiting';
-              final bool isServing =
-                  queueStatus.toLowerCase() == 'serving';
+              final String queueStatus = ticket['queueStatus'] ?? 'Waiting';
+              final bool isServing = queueStatus.toLowerCase() == 'serving';
+
+              // Calculate live position among waiting patients
+              int position = 0;
+              if (!isServing) {
+                final waitingDocs = allDocs
+                    .where((d) => (d.get('status') ?? '') == 'waiting')
+                    .toList();
+                waitingDocs.sort((a, b) =>
+                    (a.get('tokenNo') as int? ?? 0)
+                        .compareTo(b.get('tokenNo') as int? ?? 0));
+                final idx = waitingDocs.indexWhere(
+                    (d) => (d.get('patientName') ?? '') == _patientName);
+                position = idx >= 0 ? idx + 1 : 0;
+              }
+
+              final etaMins = position > 0 ? position * 15 : 0;
 
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -179,6 +198,41 @@ class _PatientHomeState extends State<PatientHome> {
                                   color: Colors.black87),
                             ),
                           ),
+                          if (!isServing && position > 0) ...[
+                            const SizedBox(height: 12),
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(Icons.format_list_numbered,
+                                    color: Colors.blue.shade700, size: 20),
+                                const SizedBox(width: 6),
+                                Text(
+                                  "Position in line: #$position",
+                                  style: TextStyle(
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.w700,
+                                    color: Colors.blue.shade800,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 4),
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(Icons.schedule,
+                                    color: Colors.grey.shade600, size: 18),
+                                const SizedBox(width: 6),
+                                Text(
+                                  "Est. wait: ~$etaMins min",
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    color: Colors.grey.shade700,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
                           const SizedBox(height: 16),
                           Row(
                             mainAxisAlignment: MainAxisAlignment.center,
@@ -187,9 +241,8 @@ class _PatientHomeState extends State<PatientHome> {
                                 isServing
                                     ? Icons.door_sliding
                                     : Icons.hourglass_top,
-                                color: isServing
-                                    ? Colors.green
-                                    : Colors.blue,
+                                color:
+                                    isServing ? Colors.green : Colors.blue,
                               ),
                               const SizedBox(width: 8),
                               Expanded(
@@ -295,7 +348,7 @@ class _PatientHomeState extends State<PatientHome> {
                     child: ListTile(
                       leading: CircleAvatar(
                         backgroundColor:
-                            Colors.blueGrey.withOpacity(0.1),
+                            Colors.blueGrey.withValues(alpha: 0.1),
                         child: const Icon(Icons.medical_services,
                             color: Colors.blueGrey),
                       ),
