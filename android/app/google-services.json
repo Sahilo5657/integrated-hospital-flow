@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "144934218340",
+    "project_id": "hospital-flow-app",
+    "storage_bucket": "hospital-flow-app.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:144934218340:android:24a224e7af4f92608c8d71",
+        "android_client_info": {
+          "package_name": "com.example.hospital_flow_app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAlACvucmY6litHjEAn16G-TMUpD6irv0g"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

@@ -1,28 +1,32 @@
 class UserProfile {
   final String uid;
-  final String name;
   final String email;
-  final UserRole role;
+  final String role; // 'patient', 'doctor', 'staff'
+  final String name;
 
-  const UserProfile({
+  UserProfile({
     required this.uid,
-    required this.name,
     required this.email,
     required this.role,
+    required this.name
   });
-}
 
-enum UserRole { patient, doctor, staff }
+  // Factory to create a UserProfile from Firestore data
+  factory UserProfile.fromFirestore(Map<String, dynamic> data, String uid) {
+    return UserProfile(
+      uid: uid,
+      email: data['email'] ?? '',
+      role: data['role'] ?? 'patient', // Default to patient if not specified
+      name: data['name'] ?? '',
+    );
+  }
 
-extension UserRoleX on UserRole {
-  String get label {
-    switch (this) {
-      case UserRole.patient:
-        return "Patient";
-      case UserRole.doctor:
-        return "Doctor";
-      case UserRole.staff:
-        return "Receptionist/Admin";
-    }
+  // Method to convert UserProfile to a Map for saving to Firestore
+  Map<String, dynamic> toMap() {
+    return {
+      'email': email,
+      'role': role,
+      'name': name,
+    };
   }
 }

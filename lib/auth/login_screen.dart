@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../common/ui_shell.dart';
-import '../models/user_profile.dart';
 import 'auth_service.dart';
 import 'register_screen.dart';
 
@@ -12,31 +12,54 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
-  final email = TextEditingController(text: "demo@hospital.com");
-  final password = TextEditingController(text: "password123");
-  final name = TextEditingController(text: "Demo User");
-  bool hide = true;
-  UserRole role = UserRole.patient;
+  final _emailController = TextEditingController();
+  final _passwordController = TextEditingController();
+  bool _hidePassword = true;
+  bool _isLoading = false;
 
-  void _login() {
-    AuthService.instance.loginDemo(
-      name: name.text.trim().isEmpty ? "Demo User" : name.text.trim(),
-      email: email.text.trim().isEmpty ? "demo@hospital.com" : email.text.trim(),
-      role: role,
-    );
+  void _login() async {
+    // Basic validation
+    if (_emailController.text.isEmpty || _passwordController.text.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Please enter email and password")),
+      );
+      return;
+    }
+
+    setState(() => _isLoading = true);
+
+    try {
+      await Provider.of<AuthService>(context, listen: false).signIn(
+        _emailController.text.trim(),
+        _passwordController.text.trim(),
+      );
+      // Success: AuthGate will automatically handle the redirect to RoleRouter
+    } catch (e) {
+      setState(() => _isLoading = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.toString().replaceAll('Exception: ', ''))),
+      );
+    }
+  }
+
+  @override
+  void dispose() {
+    _emailController.dispose();
+    _passwordController.dispose();
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     return UIShell(
       title: "Login",
+      showActions: false,
       child: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 460),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const SizedBox(height: 8),
               Text(
                 "Hospital Patient Flow",
                 style: TextStyle(
@@ -48,50 +71,37 @@ class _LoginScreenState extends State<LoginScreen> {
               ),
               const SizedBox(height: 8),
               const Text(
-                "Role-based login for Patient, Doctor, and Receptionist/Admin.",
+                "Sign in to your account",
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 18),
 
               TextField(
-                controller: name,
-                decoration: const InputDecoration(labelText: "Full Name (Demo)"),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: email,
+                controller: _emailController,
                 decoration: const InputDecoration(labelText: "Email"),
               ),
               const SizedBox(height: 12),
               TextField(
-                controller: password,
-                obscureText: hide,
+                controller: _passwordController,
+                obscureText: _hidePassword,
                 decoration: InputDecoration(
                   labelText: "Password",
                   suffixIcon: IconButton(
-                    onPressed: () => setState(() => hide = !hide),
-                    icon: Icon(hide ? Icons.visibility : Icons.visibility_off),
+                    onPressed: () => setState(() => _hidePassword = !_hidePassword),
+                    icon: Icon(_hidePassword ? Icons.visibility : Icons.visibility_off),
                   ),
                 ),
               ),
-              const SizedBox(height: 12),
 
-              DropdownButtonFormField<UserRole>(
-                value: role,
-                decoration: const InputDecoration(labelText: "Login As (Demo)"),
-                items: UserRole.values
-                    .map((r) => DropdownMenuItem(value: r, child: Text(r.label)))
-                    .toList(),
-                onChanged: (v) => setState(() => role = v ?? UserRole.patient),
-              ),
-
-              const SizedBox(height: 18),
+              const SizedBox(height: 24),
               SizedBox(
                 width: double.infinity,
                 child: FilledButton.icon(
-                  onPressed: _login,
-                  icon: const Icon(Icons.lock_open),
-                  label: const Text("Login"),
+                  onPressed: _isLoading ? null : _login,
+                  icon: _isLoading
+                      ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                      : const Icon(Icons.lock_open),
+                  label: Text(_isLoading ? "Signing in..." : "Login"),
                 ),
               ),
               const SizedBox(height: 10),
@@ -99,9 +109,8 @@ class _LoginScreenState extends State<LoginScreen> {
                 onPressed: () => Navigator.of(context).push(
                   MaterialPageRoute(builder: (_) => const RegisterScreen()),
                 ),
-                child: const Text("Create Patient Account"),
+                child: const Text("Create an account"),
               ),
-              const SizedBox(height: 12),
             ],
           ),
         ),

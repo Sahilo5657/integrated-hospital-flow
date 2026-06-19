@@ -1,48 +1,126 @@
 import 'package:flutter/material.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import '../common/ui_shell.dart';
-import '../demo/demo_data.dart';
 
-class DoctorPatientRecordScreen extends StatelessWidget {
-  const DoctorPatientRecordScreen({super.key});
+class DoctorPatientRecordScreen extends StatefulWidget {
+  final String patientId;
+  final String patientName;
+
+  const DoctorPatientRecordScreen({
+    super.key,
+    required this.patientId,
+    required this.patientName
+  });
+
+  @override
+  State<DoctorPatientRecordScreen> createState() => _DoctorPatientRecordScreenState();
+}
+
+class _DoctorPatientRecordScreenState extends State<DoctorPatientRecordScreen> {
+  final _notesController = TextEditingController();
+  bool _isLoading = false;
+
+  void _saveEncounter() async {
+    if (_notesController.text.trim().isEmpty) return;
+
+    setState(() => _isLoading = true);
+
+    try {
+      final user = FirebaseAuth.instance.currentUser;
+
+      await FirebaseFirestore.instance.collection('encounters').add({
+        'patientId': widget.patientId,
+        'patientName': widget.patientName,
+        'doctorId': user?.email ?? 'sahilo5657@gmail.com',
+        'rawNotes': _notesController.text.trim(),
+        'timestamp': FieldValue.serverTimestamp(),
+      });
+
+      _notesController.clear();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Notes saved successfully.")),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Error: $e")),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     return UIShell(
-      title: "Patient Record (Demo)",
-      child: ListView(
+      title: "Patient Record: ${widget.patientName}",
+      child: Column(
         children: [
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: const [
-                  Text("Patient: Ali (P-1099)", style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900)),
-                  SizedBox(height: 6),
-                  Text("Age: 27 • Gender: Male • Phone: 03xx-xxxxxxx"),
-                ],
+          // 1. Input for new notes
+          Padding(
+            padding: const EdgeInsets.all(16.0),
+            child: Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  children: [
+                    TextField(
+                      controller: _notesController,
+                      maxLines: 3,
+                      decoration: const InputDecoration(labelText: "Add Clinical Notes"),
+                    ),
+                    const SizedBox(height: 10),
+                    SizedBox(
+                      width: double.infinity,
+                      child: FilledButton(
+                        onPressed: _isLoading ? null : _saveEncounter,
+                        child: Text(_isLoading ? "Saving..." : "Save Encounter"),
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
           ),
-          const SizedBox(height: 12),
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: const [
-                  Text("Clinical Notes (Demo)", style: TextStyle(fontWeight: FontWeight.w900)),
-                  SizedBox(height: 8),
-                  Text("Patient reports headache for 2 days. No fever. Vitals stable. Advised rest and hydration."),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: 12),
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Text(DemoData.aiSummarySample(), style: const TextStyle(height: 1.4)),
+          const Divider(),
+          // 2. View History (StreamBuilder)
+          Expanded(
+            child: StreamBuilder<QuerySnapshot>(
+              stream: FirebaseFirestore.instance
+                  .collection('encounters')
+                  .where('patientId', isEqualTo: widget.patientId)
+                  .orderBy('timestamp', descending: true)
+                  .snapshots(),
+              builder: (context, snapshot) {
+                if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+                final docs = snapshot.data!.docs;
+                if (docs.isEmpty) return const Center(child: Text("No history available."));
+
+                return ListView.builder(
+                  itemCount: docs.length,
+                  itemBuilder: (context, index) {
+                    final data = docs[index].data() as Map<String, dynamic>;
+                    final notes = data['rawNotes'] ?? data['clinicalNotes'] ?? '';
+                    final ts = data['timestamp'] as Timestamp?;
+                    final dateStr = ts != null
+                        ? ts.toDate().toString().split('.')[0]
+                        : 'Unknown date';
+                    return ListTile(
+                      leading: const Icon(Icons.history),
+                      title: Text(
+                        notes,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      subtitle: Text("Date: $dateStr"),
+                    );
+                  },
+                );
+              },
             ),
           ),
         ],
