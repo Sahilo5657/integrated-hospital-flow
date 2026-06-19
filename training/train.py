@@ -36,10 +36,10 @@ Metrics : ROUGE-1, ROUGE-2, ROUGE-L  (standard for text summarisation)
 # ══════════════════════════════════════════════════════════════════════════════
 # STEP 0 — COLAB PACKAGE INSTALL  (uncomment when running in Colab)
 # ══════════════════════════════════════════════════════════════════════════════
-# import subprocess, sys
-# subprocess.check_call([sys.executable, "-m", "pip", "install", "-q",
-#     "transformers", "datasets", "evaluate", "rouge_score",
-#     "accelerate", "sentencepiece"])
+import subprocess, sys
+subprocess.check_call([sys.executable, "-m", "pip", "install", "-q",
+    "transformers", "datasets", "evaluate", "rouge_score",
+    "accelerate", "sentencepiece"])
 
 import os, re, warnings
 warnings.filterwarnings("ignore")
