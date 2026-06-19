@@ -471,7 +471,7 @@ trainer = Seq2SeqTrainer(
     args=training_args,
     train_dataset=dataset["train"],
     eval_dataset=dataset["validation"],
-    tokenizer=tokenizer,
+    processing_class=tokenizer,   # renamed from `tokenizer=` in transformers >= 4.46
     data_collator=collator,
     compute_metrics=compute_metrics,
     callbacks=[
