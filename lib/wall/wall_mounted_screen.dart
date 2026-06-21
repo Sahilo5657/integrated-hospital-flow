@@ -7,24 +7,107 @@ import '../models/queue_models.dart';
 import '../services/eta_service.dart';
 
 class WallMountedScreen extends StatefulWidget {
-  const WallMountedScreen({super.key});
+  final FirebaseFirestore? firestore;
+  const WallMountedScreen({super.key, this.firestore});
 
   @override
   State<WallMountedScreen> createState() => _WallMountedScreenState();
+}
+
+class _DoctorOption {
+  final String uid;
+  final String name;
+  _DoctorOption({required this.uid, required this.name});
 }
 
 class _WallMountedScreenState extends State<WallMountedScreen> {
   late Future<double> _etaFuture;
   late Timer _clockTimer;
   DateTime _now = DateTime.now();
+  String? _doctorId;
+  List<_DoctorOption> _doctors = [];
+  bool _loadingDoctors = true;
+
+  FirebaseFirestore get _db => widget.firestore ?? FirebaseFirestore.instance;
 
   @override
   void initState() {
     super.initState();
-    _etaFuture = EtaService().getEstimatedMinutesPerPatient();
+    _etaFuture = EtaService(firestore: widget.firestore).getEstimatedMinutesPerPatient();
     _clockTimer = Timer.periodic(const Duration(minutes: 1), (_) {
       if (mounted) setState(() => _now = DateTime.now());
     });
+    _loadDoctors();
+  }
+
+  Future<void> _loadDoctors() async {
+    try {
+      final snap = await _db
+          .collection('users')
+          .where('role', isEqualTo: 'doctor')
+          .get();
+      final list = snap.docs
+          .map((d) => _DoctorOption(
+                uid: d.id,
+                name: (d.data()['name'] as String? ?? '').trim(),
+              ))
+          .where((d) => d.name.isNotEmpty)
+          .toList();
+
+      if (mounted) {
+        setState(() {
+          _doctors = list;
+          if (list.length == 1) _doctorId = list.first.uid;
+          _loadingDoctors = false;
+        });
+        if (_doctors.isNotEmpty && _doctorId == null) {
+          _showDoctorPicker();
+        }
+      }
+    } catch (_) {
+      if (mounted) setState(() => _loadingDoctors = false);
+    }
+  }
+
+  void _showDoctorPicker() {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) {
+        String? picked = _doctorId;
+        return StatefulBuilder(
+          builder: (ctx, setDlg) => AlertDialog(
+            title: const Text("Select Doctor"),
+            content: DropdownButtonFormField<String>(
+              value: picked,
+              decoration: const InputDecoration(
+                border: OutlineInputBorder(),
+                prefixIcon: Icon(Icons.local_hospital_outlined),
+              ),
+              items: _doctors
+                  .map((d) => DropdownMenuItem(
+                        value: d.uid,
+                        child: Text("Dr. ${d.name}"),
+                      ))
+                  .toList(),
+              onChanged: (val) => setDlg(() => picked = val),
+              hint: const Text("Choose a doctor"),
+            ),
+            actions: [
+              TextButton(
+                onPressed: picked == null
+                    ? null
+                    : () {
+                        setState(() => _doctorId = picked);
+                        Navigator.pop(ctx);
+                      },
+                child: const Text("Confirm"),
+              ),
+            ],
+          ),
+        );
+      },
+    );
   }
 
   @override
@@ -104,6 +187,14 @@ class _WallMountedScreenState extends State<WallMountedScreen> {
                   style: const TextStyle(
                       fontSize: 11, color: Color(0xFF8B949E))),
             ],
+          ),
+          // Change doctor
+          IconButton(
+            onPressed: _showDoctorPicker,
+            icon: const Icon(Icons.swap_horiz, color: Color(0xFF58A6FF), size: 20),
+            tooltip: 'Change Doctor',
+            padding: const EdgeInsets.all(8),
+            constraints: const BoxConstraints(),
           ),
           // Logout
           IconButton(
@@ -366,7 +457,32 @@ class _WallMountedScreenState extends State<WallMountedScreen> {
     return Scaffold(
       backgroundColor: const Color(0xFF0D1117),
       body: SafeArea(
-        child: FutureBuilder<double>(
+        child: _loadingDoctors
+            ? const Center(
+                child: CircularProgressIndicator(color: Color(0xFF58A6FF)))
+            : _doctorId == null
+                ? Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Icon(Icons.local_hospital,
+                            size: 64, color: Color(0xFF58A6FF)),
+                        const SizedBox(height: 16),
+                        const Text(
+                          'Select a doctor to display the queue',
+                          style: TextStyle(
+                              fontSize: 20, color: Color(0xFFE6EDF3)),
+                        ),
+                        const SizedBox(height: 24),
+                        ElevatedButton.icon(
+                          onPressed: _showDoctorPicker,
+                          icon: const Icon(Icons.local_hospital_outlined),
+                          label: const Text('Select Doctor'),
+                        ),
+                      ],
+                    ),
+                  )
+                : FutureBuilder<double>(
           future: _etaFuture,
           builder: (context, etaSnapshot) {
             final estMins = (etaSnapshot.data ?? 15.0).round();
@@ -374,9 +490,9 @@ class _WallMountedScreenState extends State<WallMountedScreen> {
                 etaSnapshot.connectionState == ConnectionState.done;
 
             return StreamBuilder<QuerySnapshot>(
-              stream: FirebaseFirestore.instance
+              stream: _db
                   .collection('queues')
-                  .where('doctorId', isEqualTo: 'sahilo5657@gmail.com')
+                  .where('doctorId', isEqualTo: _doctorId)
                   .snapshots(),
               builder: (context, queueSnapshot) {
                 final allDocs = queueSnapshot.data?.docs ?? [];

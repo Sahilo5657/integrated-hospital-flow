@@ -9,10 +9,13 @@ import '../common/ui_shell.dart';
 import '../models/user_profile.dart';
 import '../services/ai_summary_service.dart';
 import 'doctor_queue_screen.dart';
+import 'doctor_patient_list_screen.dart';
 import '../auth/login_screen.dart';
+import '../services/doctor_settings_service.dart';
 
 class DoctorHome extends StatefulWidget {
-  const DoctorHome({super.key});
+  final FirebaseFirestore? firestore;
+  const DoctorHome({super.key, this.firestore});
 
   @override
   State<DoctorHome> createState() => _DoctorHomeState();
@@ -22,6 +25,12 @@ class _DoctorHomeState extends State<DoctorHome> {
   Future<UserProfile?>? _profileFuture;
   final _clinicalNotesController = TextEditingController();
   bool _isProcessingAI = false;
+  String _aiStatus = 'Generating AI summary…';
+  DoctorSettings _settings = const DoctorSettings();
+  final _limitController = TextEditingController();
+  bool _savingSettings = false;
+
+  String get _doctorId => FirebaseAuth.instance.currentUser?.uid ?? '';
 
   @override
   void initState() {
@@ -30,11 +39,22 @@ class _DoctorHomeState extends State<DoctorHome> {
     if (user != null) {
       _profileFuture = context.read<AuthService>().getUserProfile(user.uid);
     }
+    DoctorSettingsService(doctorId: _doctorId, firestore: widget.firestore)
+        .getSettings()
+        .then((s) {
+      if (mounted) {
+        setState(() {
+          _settings = s;
+          _limitController.text = s.dailyLimit.toString();
+        });
+      }
+    });
   }
 
   @override
   void dispose() {
     _clinicalNotesController.dispose();
+    _limitController.dispose();
     super.dispose();
   }
 
@@ -68,9 +88,9 @@ class _DoctorHomeState extends State<DoctorHome> {
 
           // Single stream — no composite index needed. Filter in-memory below.
           return StreamBuilder<QuerySnapshot>(
-            stream: FirebaseFirestore.instance
+            stream: (widget.firestore ?? FirebaseFirestore.instance)
                 .collection('queues')
-                .where('doctorId', isEqualTo: 'sahilo5657@gmail.com')
+                .where('doctorId', isEqualTo: _doctorId)
                 .snapshots(),
             builder: (context, allQueuesSnapshot) {
               final allDocs = allQueuesSnapshot.data?.docs ?? [];
@@ -184,17 +204,25 @@ class _DoctorHomeState extends State<DoctorHome> {
                     title: "Queue & Session Controls",
                     children: [
                       if (_isProcessingAI)
-                        const Center(
+                        Center(
                           child: Padding(
-                            padding: EdgeInsets.symmetric(vertical: 16.0),
+                            padding: const EdgeInsets.symmetric(vertical: 16.0),
                             child: Column(
                               children: [
-                                CircularProgressIndicator(
+                                const CircularProgressIndicator(
                                     color: Colors.blueGrey),
-                                SizedBox(height: 8),
-                                Text("Generating AI summary...",
-                                    style:
-                                        TextStyle(color: Colors.blueGrey)),
+                                const SizedBox(height: 12),
+                                Text(_aiStatus,
+                                    textAlign: TextAlign.center,
+                                    style: const TextStyle(
+                                        color: Colors.blueGrey)),
+                                const SizedBox(height: 4),
+                                const Text(
+                                  'First load may take 1–3 min.',
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                      fontSize: 12, color: Colors.grey),
+                                ),
                               ],
                             ),
                           ),
@@ -218,8 +246,7 @@ class _DoctorHomeState extends State<DoctorHome> {
                                               await FirebaseFirestore.instance
                                                   .collection('queues')
                                                   .where('doctorId',
-                                                      isEqualTo:
-                                                          'sahilo5657@gmail.com')
+                                                      isEqualTo: _doctorId)
                                                   .get();
 
                                           final batch = FirebaseFirestore
@@ -304,8 +331,10 @@ class _DoctorHomeState extends State<DoctorHome> {
                                               return;
                                             }
 
-                                            setState(
-                                                () => _isProcessingAI = true);
+                                            setState(() {
+                                              _isProcessingAI = true;
+                                              _aiStatus = 'Connecting to AI model…';
+                                            });
 
                                             final messenger =
                                                 ScaffoldMessenger.of(context);
@@ -321,8 +350,7 @@ class _DoctorHomeState extends State<DoctorHome> {
                                                 'patientId': activePatientId,
                                                 'patientName':
                                                     activePatientName,
-                                                'doctorId':
-                                                    'sahilo5657@gmail.com',
+                                                'doctorId': _doctorId,
                                                 'timestamp': FieldValue
                                                     .serverTimestamp(),
                                                 'rawNotes': enteredNotes,
@@ -335,7 +363,10 @@ class _DoctorHomeState extends State<DoctorHome> {
                                                     await AISummaryService()
                                                         .getSummary(
                                                             encounterRef.id,
-                                                            enteredNotes);
+                                                            enteredNotes,
+                                                            onStatus: (msg) {
+                                                              if (mounted) setState(() => _aiStatus = msg);
+                                                            });
                                               } catch (_) {
                                                 aiSummary =
                                                     "Summary generation failed. Please try again from the queue screen.";
@@ -394,10 +425,150 @@ class _DoctorHomeState extends State<DoctorHome> {
                         child: OutlinedButton.icon(
                           onPressed: () => Navigator.of(context).push(
                             MaterialPageRoute(
-                                builder: (_) => const DoctorQueueScreen()),
+                                builder: (_) => DoctorQueueScreen(doctorId: _doctorId)),
                           ),
                           icon: const Icon(Icons.list_alt),
                           label: const Text("View Full Queue"),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      SizedBox(
+                        width: double.infinity,
+                        child: OutlinedButton.icon(
+                          onPressed: () => Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (_) => DoctorPatientListScreen(
+                                  doctorId: _doctorId,
+                                  firestore: widget.firestore),
+                            ),
+                          ),
+                          icon: const Icon(Icons.history),
+                          label: const Text("Patient History"),
+                        ),
+                      ),
+                    ],
+                  ),
+
+                  const SizedBox(height: 20),
+
+                  UISection(
+                    title: "Queue Limits",
+                    children: [
+                      const Text(
+                        "Control how many patients the doctor accepts per day and when appointments stop.",
+                        style: TextStyle(color: Colors.grey, fontSize: 13),
+                      ),
+                      const SizedBox(height: 14),
+                      TextField(
+                        controller: _limitController,
+                        keyboardType: TextInputType.number,
+                        decoration: const InputDecoration(
+                          labelText: "Daily patient limit",
+                          border: OutlineInputBorder(),
+                          prefixIcon: Icon(Icons.people_alt_outlined),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      SizedBox(
+                        width: double.infinity,
+                        child: OutlinedButton.icon(
+                          onPressed: () async {
+                            final picked = await showTimePicker(
+                              context: context,
+                              initialTime: TimeOfDay(
+                                  hour: _settings.endTimeHour,
+                                  minute: _settings.endTimeMinute),
+                            );
+                            if (picked != null && mounted) {
+                              setState(() {
+                                _settings = DoctorSettings(
+                                  dailyLimit: int.tryParse(
+                                          _limitController.text.trim()) ??
+                                      _settings.dailyLimit,
+                                  endTimeHour: picked.hour,
+                                  endTimeMinute: picked.minute,
+                                );
+                              });
+                            }
+                          },
+                          icon: const Icon(Icons.schedule),
+                          label: Text(
+                            _settings.endTimeSet
+                                ? "Working until: ${_settings.endTimeLabel}"
+                                : "Set end time for appointments (optional)",
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      SizedBox(
+                        width: double.infinity,
+                        child: FilledButton.icon(
+                          style: FilledButton.styleFrom(
+                              backgroundColor: Colors.teal.shade700),
+                          onPressed: _savingSettings
+                              ? null
+                              : () async {
+                                  final limit = int.tryParse(
+                                          _limitController.text.trim()) ??
+                                      0;
+                                  if (limit < 1) {
+                                    ScaffoldMessenger.of(context)
+                                        .showSnackBar(
+                                      const SnackBar(
+                                          content: Text(
+                                              "Limit must be at least 1.")),
+                                    );
+                                    return;
+                                  }
+                                  final newSettings = DoctorSettings(
+                                    dailyLimit: limit,
+                                    endTimeHour: _settings.endTimeHour,
+                                    endTimeMinute: _settings.endTimeMinute,
+                                  );
+                                  setState(() => _savingSettings = true);
+                                  try {
+                                    await DoctorSettingsService(
+                                            doctorId: _doctorId,
+                                            firestore: widget.firestore)
+                                        .saveSettings(newSettings);
+                                    if (mounted) {
+                                      setState(() {
+                                        _settings = newSettings;
+                                        _savingSettings = false;
+                                      });
+                                      ScaffoldMessenger.of(context)
+                                          .showSnackBar(
+                                        const SnackBar(
+                                          content:
+                                              Text("Queue limits saved."),
+                                          backgroundColor: Colors.green,
+                                        ),
+                                      );
+                                    }
+                                  } catch (e) {
+                                    if (mounted) {
+                                      setState(
+                                          () => _savingSettings = false);
+                                      ScaffoldMessenger.of(context)
+                                          .showSnackBar(
+                                        SnackBar(
+                                          content: Text("Error: $e"),
+                                          backgroundColor: Colors.red,
+                                        ),
+                                      );
+                                    }
+                                  }
+                                },
+                          icon: _savingSettings
+                              ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color: Colors.white))
+                              : const Icon(Icons.save),
+                          label: Text(
+                              _savingSettings ? "Saving..." : "Save Limits"),
                         ),
                       ),
                     ],

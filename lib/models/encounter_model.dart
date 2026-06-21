@@ -22,14 +22,16 @@ class EncounterModel {
     'timestamp': Timestamp.fromDate(timestamp),
   };
 
-  factory EncounterModel.fromFirestore(DocumentSnapshot doc) {
-    Map data = doc.data() as Map<String, dynamic>;
+  factory EncounterModel.fromMap(Map<String, dynamic> data, String id) {
     return EncounterModel(
-      id: doc.id,
-      patientId: data['patientId'],
-      doctorId: data['doctorId'],
-      clinicalNotes: data['clinicalNotes'],
+      id: id,
+      patientId: data['patientId'] ?? '',
+      doctorId: data['doctorId'] ?? '',
+      clinicalNotes: data['clinicalNotes'] ?? '',
       timestamp: (data['timestamp'] as Timestamp).toDate(),
     );
   }
+
+  factory EncounterModel.fromFirestore(DocumentSnapshot doc) =>
+      EncounterModel.fromMap(doc.data() as Map<String, dynamic>, doc.id);
 }

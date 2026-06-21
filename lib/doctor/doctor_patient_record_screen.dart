@@ -2,15 +2,18 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../common/ui_shell.dart';
+import '../services/audit_log_service.dart';
 
 class DoctorPatientRecordScreen extends StatefulWidget {
   final String patientId;
   final String patientName;
+  final FirebaseFirestore? firestore;
 
   const DoctorPatientRecordScreen({
     super.key,
     required this.patientId,
-    required this.patientName
+    required this.patientName,
+    this.firestore,
   });
 
   @override
@@ -29,13 +32,23 @@ class _DoctorPatientRecordScreenState extends State<DoctorPatientRecordScreen> {
     try {
       final user = FirebaseAuth.instance.currentUser;
 
-      await FirebaseFirestore.instance.collection('encounters').add({
+      await (widget.firestore ?? FirebaseFirestore.instance).collection('encounters').add({
         'patientId': widget.patientId,
         'patientName': widget.patientName,
         'doctorId': user?.email ?? 'sahilo5657@gmail.com',
         'rawNotes': _notesController.text.trim(),
         'timestamp': FieldValue.serverTimestamp(),
       });
+
+      await AuditLogService(firestore: widget.firestore).log(
+        action : AuditAction.patientRecordSaved,
+        actor  : user?.email ?? 'unknown',
+        role   : 'doctor',
+        details: {
+          'patientName': widget.patientName,
+          'patientId'  : widget.patientId,
+        },
+      );
 
       _notesController.clear();
       if (mounted) {
@@ -92,7 +105,7 @@ class _DoctorPatientRecordScreenState extends State<DoctorPatientRecordScreen> {
             child: StreamBuilder<QuerySnapshot>(
               // Query by patientName — works for both linked and NFC-only patients,
               // and avoids needing a composite Firestore index.
-              stream: FirebaseFirestore.instance
+              stream: (widget.firestore ?? FirebaseFirestore.instance)
                   .collection('encounters')
                   .where('patientName', isEqualTo: widget.patientName)
                   .snapshots(),

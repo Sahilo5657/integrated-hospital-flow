@@ -19,17 +19,17 @@ class UIShell extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(title, style: const TextStyle(fontWeight: FontWeight.w900)),
+        title: Text(title),
+        shadowColor: Colors.black26,
+        surfaceTintColor: Colors.transparent,
         actions: showActions
             ? [
                 ...?actions,
                 IconButton(
                   icon: const Icon(Icons.account_circle_outlined),
-                  onPressed: () {
-                    Navigator.of(context).push(
-                      MaterialPageRoute(builder: (_) => const ProfileScreen()),
-                    );
-                  },
+                  onPressed: () => Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const ProfileScreen()),
+                  ),
                   tooltip: "My Profile",
                 ),
               ]

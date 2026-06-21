@@ -9,7 +9,8 @@ import '../patient/patient_home.dart';
 import '../wall/wall_mounted_screen.dart';
 
 class RoleRouter extends StatefulWidget {
-  const RoleRouter({super.key});
+  final FirebaseAuth? auth;
+  const RoleRouter({super.key, this.auth});
 
   @override
   State<RoleRouter> createState() => _RoleRouterState();
@@ -25,7 +26,7 @@ class _RoleRouterState extends State<RoleRouter> {
     // This is critical: a StatelessWidget would create a new Future on every
     // parent rebuild (AuthGate fires multiple times on login), resetting the
     // spinner indefinitely.
-    final user = FirebaseAuth.instance.currentUser;
+    final user = (widget.auth ?? FirebaseAuth.instance).currentUser;
     if (user != null) {
       _profileFuture = context
           .read<AuthService>()
@@ -41,24 +42,6 @@ class _RoleRouterState extends State<RoleRouter> {
 
   @override
   Widget build(BuildContext context) {
-    // Email-based bypass runs immediately — no async wait needed for these accounts.
-    final user = FirebaseAuth.instance.currentUser;
-    if (user?.email != null) {
-      final email = user!.email!.toLowerCase();
-      if (email == 'wallmounted@gmail.com' || email.contains('wallmount')) {
-        return const WallMountedScreen();
-      }
-      if (email == 'sahilo5657@gmail.com' || email.contains('doctor')) {
-        return const DoctorHome();
-      }
-      if (email == 'eshaan5657@gmail.com' || email.contains('staff')) {
-        return const StaffHome();
-      }
-      if (email.contains('patient') || email.contains('testpatient')) {
-        return const PatientHome();
-      }
-    }
-
     return FutureBuilder<UserProfile?>(
       future: _profileFuture,
       builder: (context, snapshot) {
@@ -86,6 +69,8 @@ class _RoleRouterState extends State<RoleRouter> {
             return const StaffHome();
           case 'patient':
             return const PatientHome();
+          case 'wallmounted':
+            return const WallMountedScreen();
           default:
             return const PatientHome();
         }

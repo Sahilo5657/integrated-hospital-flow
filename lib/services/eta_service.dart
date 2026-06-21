@@ -17,12 +17,16 @@ class EtaService {
   static const double _alpha = 0.35;
   static const String _doctorId = 'sahilo5657@gmail.com';
 
+  final FirebaseFirestore _firestore;
+  EtaService({FirebaseFirestore? firestore})
+      : _firestore = firestore ?? FirebaseFirestore.instance;
+
   /// Returns the estimated minutes per consultation.
   /// Falls back to 15 min when fewer than 2 historical records exist.
   Future<double> getEstimatedMinutesPerPatient() async {
     try {
       // Single where clause — avoids composite Firestore index.
-      final snapshot = await FirebaseFirestore.instance
+      final snapshot = await _firestore
           .collection('encounters')
           .where('doctorId', isEqualTo: _doctorId)
           .get();

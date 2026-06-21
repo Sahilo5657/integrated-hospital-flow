@@ -25,15 +25,16 @@ class PatientModel {
     };
   }
 
-  // Create from Firestore
-  factory PatientModel.fromFirestore(DocumentSnapshot doc) {
-    Map data = doc.data() as Map<String, dynamic>;
+  factory PatientModel.fromMap(Map<String, dynamic> data, String id) {
     return PatientModel(
-      uid: doc.id,
+      uid: id,
       name: data['name'] ?? '',
       contact: data['contact'] ?? '',
       nfcCardId: data['nfcCardId'],
       createdAt: (data['createdAt'] as Timestamp).toDate(),
     );
   }
+
+  factory PatientModel.fromFirestore(DocumentSnapshot doc) =>
+      PatientModel.fromMap(doc.data() as Map<String, dynamic>, doc.id);
 }

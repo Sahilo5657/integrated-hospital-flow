@@ -1,18 +1,48 @@
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../common/ui_shell.dart';
 import '../models/queue_models.dart';
 import '../services/ai_summary_service.dart';
+import '../services/audit_log_service.dart';
+import '../services/eta_service.dart';
 import 'doctor_patient_record_screen.dart';
 
-class DoctorQueueScreen extends StatelessWidget {
-  const DoctorQueueScreen({super.key});
+class DoctorQueueScreen extends StatefulWidget {
+  final String doctorId;
+  final FirebaseFirestore? firestore;
+  const DoctorQueueScreen({super.key, required this.doctorId, this.firestore});
 
-  void _servePatient(String docId) {
-    FirebaseFirestore.instance.collection('queues').doc(docId).update({
+  @override
+  State<DoctorQueueScreen> createState() => _DoctorQueueScreenState();
+}
+
+class _DoctorQueueScreenState extends State<DoctorQueueScreen> {
+  double _avgMins = 15.0;
+
+  FirebaseFirestore get _db   => widget.firestore ?? FirebaseFirestore.instance;
+  String get _actor           => FirebaseAuth.instance.currentUser?.email ?? 'unknown';
+  AuditLogService get _audit  => AuditLogService(firestore: widget.firestore);
+
+  @override
+  void initState() {
+    super.initState();
+    EtaService(firestore: widget.firestore)
+        .getEstimatedMinutesPerPatient()
+        .then((v) { if (mounted) setState(() => _avgMins = v); });
+  }
+
+  void _servePatient(String docId, String patientName) {
+    _db.collection('queues').doc(docId).update({
       'status': 'serving',
       'queueStatus': 'Serving',
     });
+    _audit.log(
+      action : AuditAction.queuePatientCalled,
+      actor  : _actor,
+      role   : 'doctor',
+      details: {'queueDocId': docId, 'patientName': patientName},
+    );
   }
 
   void _showAISummary(
@@ -25,7 +55,7 @@ class DoctorQueueScreen extends StatelessWidget {
 
     try {
       // Query by patientName — more reliable since patientId may be empty for NFC check-ins
-      final encounterQuery = await FirebaseFirestore.instance
+      final encounterQuery = await _db
           .collection('encounters')
           .where('patientName', isEqualTo: patientName)
           .get();
@@ -83,6 +113,12 @@ class DoctorQueueScreen extends StatelessWidget {
 
       if (context.mounted) {
         Navigator.pop(context);
+        _audit.log(
+          action : AuditAction.aiSummaryViewed,
+          actor  : _actor,
+          role   : 'doctor',
+          details: {'patientName': patientName, 'encounterId': encounterId},
+        );
         showModalBottomSheet(
           context: context,
           isScrollControlled: true,
@@ -146,9 +182,9 @@ class DoctorQueueScreen extends StatelessWidget {
     return UIShell(
       title: "Today's Queue",
       child: StreamBuilder<QuerySnapshot>(
-        stream: FirebaseFirestore.instance
+        stream: _db
             .collection('queues')
-            .where('doctorId', isEqualTo: 'sahilo5657@gmail.com')
+            .where('doctorId', isEqualTo: widget.doctorId)
             .snapshots(),
         builder: (context, snapshot) {
           if (snapshot.hasError) {
@@ -226,6 +262,8 @@ class DoctorQueueScreen extends StatelessWidget {
             separatorBuilder: (_, __) => const SizedBox(height: 10),
             itemBuilder: (context, i) {
               final q = QueueItem.fromFirestore(docs[i]);
+              // i patients are ahead in the sorted list; each takes ~_avgMins
+              final etaMins = (i * _avgMins).round();
 
               return Card(
                 child: Column(
@@ -247,12 +285,16 @@ class DoctorQueueScreen extends StatelessWidget {
                       title: Text(q.patientName,
                           style:
                               const TextStyle(fontWeight: FontWeight.w800)),
-                      subtitle: Text("ETA: ${q.etaMins} min"),
+                      subtitle: Text(
+                        q.status == QueueStatus.serving
+                            ? "In consultation"
+                            : "Est. wait: $etaMins min",
+                      ),
                       trailing: q.status == QueueStatus.waiting
                           ? IconButton(
                               icon: const Icon(Icons.campaign,
                                   color: Colors.blue),
-                              onPressed: () => _servePatient(q.id),
+                              onPressed: () => _servePatient(q.id, q.patientName),
                               tooltip: "Call Patient",
                             )
                           : const Chip(
@@ -278,15 +320,23 @@ class DoctorQueueScreen extends StatelessWidget {
                           ),
                           const SizedBox(width: 8),
                           TextButton.icon(
-                            onPressed: () => Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) => DoctorPatientRecordScreen(
-                                  patientId: q.patientId,
-                                  patientName: q.patientName,
+                            onPressed: () {
+                              _audit.log(
+                                action : AuditAction.patientRecordViewed,
+                                actor  : _actor,
+                                role   : 'doctor',
+                                details: {'patientName': q.patientName, 'patientId': q.patientId},
+                              );
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => DoctorPatientRecordScreen(
+                                    patientId: q.patientId,
+                                    patientName: q.patientName,
+                                  ),
                                 ),
-                              ),
-                            ),
+                              );
+                            },
                             icon: const Icon(Icons.folder_open, size: 18),
                             label: const Text("View Record"),
                             style: TextButton.styleFrom(

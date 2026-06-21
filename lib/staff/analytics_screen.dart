@@ -3,7 +3,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import '../common/ui_shell.dart';
 
 class AnalyticsScreen extends StatelessWidget {
-  const AnalyticsScreen({super.key});
+  final FirebaseFirestore? _firestore;
+  const AnalyticsScreen({super.key, FirebaseFirestore? firestore}) : _firestore = firestore;
 
   String _formatHour(int hour) {
     if (hour == 0) return "12:00 AM";
@@ -22,7 +23,7 @@ class AnalyticsScreen extends StatelessWidget {
     return UIShell(
       title: "Clinic Analytics Reports",
       child: StreamBuilder<QuerySnapshot>(
-        stream: FirebaseFirestore.instance
+        stream: (_firestore ?? FirebaseFirestore.instance)
             .collection('queues')
             .where('doctorId', isEqualTo: 'sahilo5657@gmail.com')
             .snapshots(),

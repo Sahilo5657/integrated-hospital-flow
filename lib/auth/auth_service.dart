@@ -2,15 +2,32 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart'; // This import gives you access to 'ChangeNotifier'
 import '../models/user_profile.dart';
+import '../services/eta_service.dart';
+import '../services/doctor_settings_service.dart'; // DoctorSettingsService
+import '../services/audit_log_service.dart';
 
 // By adding 'extends ChangeNotifier', this class can now tell the UI to rebuild
 class AuthService extends ChangeNotifier {
-  final FirebaseAuth _auth = FirebaseAuth.instance;
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  final FirebaseAuth _auth;
+  final FirebaseFirestore _firestore;
 
-  // Sign Up
+  late final AuditLogService _audit;
+
+  AuthService({FirebaseAuth? auth, FirebaseFirestore? firestore})
+      : _auth = auth ?? FirebaseAuth.instance,
+        _firestore = firestore ?? FirebaseFirestore.instance {
+    _audit = AuditLogService(firestore: _firestore);
+  }
+
+  // Sign Up — only patients can self-register.
+  // Doctor and staff accounts are created by the hospital admin.
   Future<void> signUp(String email, String password, String name, String role, {String? nfcCardId}) async {
     try {
+      if (role != 'patient') {
+        throw Exception(
+            "Only patients can create accounts through the app. "
+            "Doctor and staff accounts are provided by your hospital.");
+      }
       if (role == 'patient') {
         if (nfcCardId == null || nfcCardId.isEmpty) {
           throw Exception("NFC Card ID is required for patients.");
@@ -49,6 +66,13 @@ class AuthService extends ChangeNotifier {
 
       await batch.commit();
 
+      await _audit.log(
+        action : AuditAction.userRegistered,
+        actor  : email,
+        role   : role,
+        details: {'name': name, if (nfcCardId != null) 'nfcCardId': nfcCardId},
+      );
+
       // 'notifyListeners()' tells any UI listening to this service to refresh
       notifyListeners();
     } on FirebaseAuthException catch (e) {
@@ -60,6 +84,12 @@ class AuthService extends ChangeNotifier {
   Future<void> signIn(String email, String password) async {
     try {
       await _auth.signInWithEmailAndPassword(email: email, password: password);
+      // Role is not known here yet; role_router resolves it after sign-in.
+      await _audit.log(
+        action : AuditAction.userLogin,
+        actor  : email,
+        role   : 'unknown',
+      );
       notifyListeners();
     } on FirebaseAuthException catch (e) {
       throw Exception(e.message);
@@ -68,12 +98,26 @@ class AuthService extends ChangeNotifier {
 
   // Sign Out
   Future<void> signOut() async {
+    final actor = _auth.currentUser?.email ?? 'unknown';
+    await _audit.log(
+      action : AuditAction.userLogout,
+      actor  : actor,
+      role   : 'unknown',
+    );
     await _auth.signOut();
     notifyListeners();
   }
 
-  Future<void> joinQueue(String name, String uid) async {
+  Future<void> joinQueue(String name, String uid, String doctorId) async {
     try {
+      // 0. Check if the queue is accepting new patients (daily limit + end time)
+      final blocked = await DoctorSettingsService(
+              doctorId: doctorId, firestore: _firestore)
+          .checkQueueAccess();
+      if (blocked != null) {
+        throw Exception(blocked);
+      }
+
       // 1. Check for duplicates
       final existingQuery = await _firestore.collection('queues')
           .where('patientId', isEqualTo: uid)
@@ -96,14 +140,36 @@ class AuthService extends ChangeNotifier {
         newTokenNo = (lastQueue.docs.first.data()['tokenNo'] as int) + 1;
       }
 
+      // Count active patients to assign a position-based ETA
+      final activeQueue = await _firestore
+          .collection('queues')
+          .where('status', whereIn: ['waiting', 'serving'])
+          .get();
+      final position = activeQueue.docs.length + 1;
+      final avgMins = await EtaService(firestore: _firestore).getEstimatedMinutesPerPatient();
+      final etaMins = (position * avgMins).round();
+
       await _firestore.collection('queues').add({
+        'doctorId': doctorId,
         'patientName': name,
         'patientId': uid,
         'tokenNo': newTokenNo,
         'status': 'waiting',
-        'etaMins': 15, // Default ETA
+        'etaMins': etaMins,
         'timestamp': FieldValue.serverTimestamp(),
       });
+
+      await _audit.log(
+        action : AuditAction.queueJoined,
+        actor  : uid,
+        role   : 'patient',
+        details: {
+          'patientName': name,
+          'doctorId'   : doctorId,
+          'tokenNo'    : newTokenNo,
+          'etaMins'    : etaMins,
+        },
+      );
     } catch (e) {
       throw Exception(e.toString());
     }
@@ -166,9 +232,14 @@ class AuthService extends ChangeNotifier {
         batch.update(nextQuery.docs.first.reference, {'status': 'serving'});
         await batch.commit();
       } else {
-        // If no one is waiting, just commit the completion of current serving
         await batch.commit();
       }
+
+      await _audit.log(
+        action : AuditAction.queueCallNext,
+        actor  : _auth.currentUser?.email ?? 'unknown',
+        role   : 'doctor',
+      );
     } catch (e) {
       throw Exception(e.toString());
     }
@@ -190,6 +261,12 @@ class AuthService extends ChangeNotifier {
         batch.update(doc.reference, {'status': 'done', 'queueStatus': 'Done'});
       }
       await batch.commit();
+
+      await _audit.log(
+        action : AuditAction.queueVisitDone,
+        actor  : _auth.currentUser?.email ?? 'unknown',
+        role   : 'doctor',
+      );
 
       await callNext();
     } catch (e) {

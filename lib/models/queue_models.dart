@@ -39,11 +39,9 @@ class QueueItem {
     };
   }
 
-  // Create from Firestore Document
-  factory QueueItem.fromFirestore(DocumentSnapshot doc) {
-    final data = doc.data() as Map<String, dynamic>? ?? {};
+  factory QueueItem.fromMap(Map<String, dynamic> data, String id) {
     return QueueItem(
-      id: doc.id,
+      id: id,
       tokenNo: data['tokenNo'] ?? 0,
       patientName: data['patientName'] ?? 'Unknown',
       patientId: data['patientId'] ?? 'N/A',
@@ -55,4 +53,7 @@ class QueueItem {
       timestamp: (data['timestamp'] as Timestamp?)?.toDate() ?? DateTime.now(),
     );
   }
+
+  factory QueueItem.fromFirestore(DocumentSnapshot doc) =>
+      QueueItem.fromMap(doc.data() as Map<String, dynamic>? ?? {}, doc.id);
 }

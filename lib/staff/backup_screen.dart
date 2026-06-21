@@ -1,9 +1,12 @@
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../common/ui_shell.dart';
+import '../services/audit_log_service.dart';
 
 class BackupScreen extends StatefulWidget {
-  const BackupScreen({super.key});
+  final FirebaseFirestore? firestore;
+  const BackupScreen({super.key, this.firestore});
 
   @override
   State<BackupScreen> createState() => _BackupScreenState();
@@ -21,7 +24,7 @@ class _BackupScreenState extends State<BackupScreen> {
 
     try {
       // Pull all active tokens from the live queues collection
-      final snapshot = await FirebaseFirestore.instance
+      final snapshot = await (widget.firestore ?? FirebaseFirestore.instance)
           .collection('queues')
           .where('doctorId', isEqualTo: 'sahilo5657@gmail.com')
           .get();
@@ -48,6 +51,13 @@ class _BackupScreenState extends State<BackupScreen> {
         _localBackupStorage = temporaryTank;
         _backupTimestamp = "Last Snapshot: ${DateTime.now().hour}:${DateTime.now().minute.toString().padLeft(2, '0')} (${_localBackupStorage.length} records safely exported)";
       });
+
+      await AuditLogService(firestore: widget.firestore).log(
+        action : AuditAction.backupExported,
+        actor  : FirebaseAuth.instance.currentUser?.email ?? 'unknown',
+        role   : 'staff',
+        details: {'recordCount': _localBackupStorage.length},
+      );
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -82,11 +92,18 @@ class _BackupScreenState extends State<BackupScreen> {
         final docId = item['docId'];
 
         // Push the record back to the cloud
-        await FirebaseFirestore.instance
+        await (widget.firestore ?? FirebaseFirestore.instance)
             .collection('queues')
             .doc(docId)
             .set(item);
       }
+
+      await AuditLogService(firestore: widget.firestore).log(
+        action : AuditAction.backupRestored,
+        actor  : FirebaseAuth.instance.currentUser?.email ?? 'unknown',
+        role   : 'staff',
+        details: {'recordCount': _localBackupStorage.length},
+      );
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

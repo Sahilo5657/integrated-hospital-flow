@@ -24,14 +24,16 @@ class DoctorModel {
     };
   }
 
-  factory DoctorModel.fromFirestore(DocumentSnapshot doc) {
-    Map data = doc.data() as Map<String, dynamic>;
+  factory DoctorModel.fromMap(Map<String, dynamic> data, String id) {
     return DoctorModel(
-      uid: doc.id,
+      uid: id,
       name: data['name'] ?? '',
       specialization: data['specialization'] ?? '',
       clinicRoom: data['clinicRoom'] ?? '',
-      dailyLimit: data['dailyLimit'] ?? 20, // Default to 20 if not set
+      dailyLimit: data['dailyLimit'] ?? 20,
     );
   }
+
+  factory DoctorModel.fromFirestore(DocumentSnapshot doc) =>
+      DoctorModel.fromMap(doc.data() as Map<String, dynamic>, doc.id);
 }

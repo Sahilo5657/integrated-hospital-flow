@@ -1,0 +1,695 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NFC Check-in Station — Hospital Flow</title>
+
+  <!-- Firebase compat SDK — works from file:// without a web server -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+
+  <style>
+    :root {
+      --primary:        #00695c;
+      --primary-light:  #e0f2f1;
+      --primary-mid:    #00897b;
+      --success:        #2e7d32;
+      --success-light:  #e8f5e9;
+      --warning:        #e65100;
+      --warning-light:  #fff3e0;
+      --danger:         #c62828;
+      --danger-light:   #ffebee;
+      --bg:             #f4f6f8;
+      --card:           #ffffff;
+      --text:           #1c1c2e;
+      --muted:          #6b7280;
+      --border:         #e5e7eb;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+
+    /* ── Header ── */
+    header {
+      background: var(--primary);
+      color: white;
+      padding: 14px 24px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    header .title h1 { font-size: 18px; font-weight: 700; }
+    header .title p  { font-size: 12px; opacity: 0.75; margin-top: 1px; }
+    #clock {
+      margin-left: auto;
+      font-size: 24px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      letter-spacing: 1px;
+    }
+
+    /* ── Layout ── */
+    .container {
+      max-width: 760px;
+      margin: 0 auto;
+      padding: 20px 16px 40px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .card {
+      background: var(--card);
+      border-radius: 14px;
+      padding: 18px 20px;
+      box-shadow: 0 1px 6px rgba(0,0,0,0.07);
+    }
+
+    .card-label {
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: 1.4px;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 12px;
+    }
+
+    /* ── Stats row ── */
+    .stats-row {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 10px;
+    }
+
+    .stat-box {
+      background: var(--bg);
+      border-radius: 10px;
+      padding: 12px 10px;
+      text-align: center;
+    }
+
+    .stat-box .val {
+      font-size: 30px;
+      font-weight: 800;
+      color: var(--primary);
+      line-height: 1;
+    }
+
+    .stat-box .lbl {
+      font-size: 11px;
+      color: var(--muted);
+      margin-top: 4px;
+    }
+
+    /* ── Status pill ── */
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 16px;
+      border-radius: 999px;
+      font-size: 13px;
+      font-weight: 700;
+      margin-top: 14px;
+    }
+
+    .pill-open { background: var(--success-light); color: var(--success); }
+    .pill-full { background: var(--danger-light);   color: var(--danger); }
+    .pill-load { background: var(--bg);             color: var(--muted); }
+
+    /* ── NFC listener box ── */
+    .listener {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 20px;
+      background: var(--primary-light);
+      border-radius: 14px;
+      border: 2px dashed var(--primary-mid);
+    }
+
+    .pulse {
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: var(--primary);
+      animation: pulse 1.5s ease-in-out infinite;
+      flex-shrink: 0;
+    }
+
+    @keyframes pulse {
+      0%, 100% { transform: scale(1);   opacity: 1; }
+      50%       { transform: scale(1.5); opacity: 0.4; }
+    }
+
+    .listener-text p      { font-size: 16px; font-weight: 700; color: var(--primary); }
+    .listener-text small  { font-size: 12px; color: var(--muted); margin-top: 3px; display: block; }
+
+    /* ── Activity log ── */
+    #activity-list {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .entry {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      padding: 12px 14px;
+      border-radius: 10px;
+      animation: slideIn 0.25s ease;
+    }
+
+    @keyframes slideIn {
+      from { opacity: 0; transform: translateY(-6px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    .entry.success { background: var(--success-light); }
+    .entry.warning { background: var(--warning-light); }
+    .entry.error   { background: var(--danger-light); }
+
+    .entry-icon { font-size: 20px; line-height: 1; flex-shrink: 0; margin-top: 1px; }
+
+    .entry-body strong { font-size: 14px; font-weight: 700; display: block; }
+    .entry-body small  { font-size: 12px; color: var(--muted); margin-top: 2px; display: block; }
+
+    .placeholder { font-size: 13px; color: var(--muted); padding: 6px 0; }
+
+    /* ── Toast ── */
+    #toast {
+      position: fixed;
+      bottom: 28px;
+      left: 50%;
+      transform: translateX(-50%) translateY(120px);
+      padding: 14px 28px;
+      border-radius: 14px;
+      font-size: 15px;
+      font-weight: 600;
+      max-width: 500px;
+      width: 90%;
+      text-align: center;
+      box-shadow: 0 8px 28px rgba(0,0,0,0.18);
+      transition: transform 0.3s cubic-bezier(.175,.885,.32,1.275);
+      z-index: 999;
+      pointer-events: none;
+    }
+
+    #toast.show           { transform: translateX(-50%) translateY(0); }
+    #toast.toast-success  { background: var(--success); color: white; }
+    #toast.toast-warning  { background: var(--warning); color: white; }
+    #toast.toast-error    { background: var(--danger);  color: white; }
+
+    /* ── Busy overlay ── */
+    #busy {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.2);
+      z-index: 900;
+      align-items: center;
+      justify-content: center;
+    }
+
+    #busy.show { display: flex; }
+
+    .busy-box {
+      background: white;
+      padding: 28px 40px;
+      border-radius: 18px;
+      text-align: center;
+      box-shadow: 0 12px 40px rgba(0,0,0,0.15);
+    }
+
+    .spinner {
+      width: 40px;
+      height: 40px;
+      border: 4px solid var(--primary-light);
+      border-top-color: var(--primary);
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      margin: 0 auto 14px;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    #busy-label { font-size: 15px; font-weight: 600; color: var(--primary); }
+
+    /* ── Hidden NFC input ── */
+    #nfc {
+      position: fixed;
+      top: -200px;
+      left: 0;
+      width: 1px;
+      height: 1px;
+      opacity: 0;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <!-- Hospital cross icon -->
+  <svg width="30" height="30" viewBox="0 0 24 24" fill="none"
+       stroke="white" stroke-width="2" stroke-linecap="round">
+    <rect x="3" y="3" width="18" height="18" rx="3"/>
+    <line x1="12" y1="8" x2="12" y2="16"/>
+    <line x1="8"  y1="12" x2="16" y2="12"/>
+  </svg>
+  <div class="title">
+    <h1>NFC Check-in Station</h1>
+    <p>Hospital Patient Flow System</p>
+  </div>
+  <div id="clock">--:--:--</div>
+</header>
+
+<div class="container">
+
+  <!-- Doctor picker -->
+  <div class="card" id="doctor-card">
+    <div class="card-label">Select Doctor</div>
+    <select id="doctor-select"
+      style="width:100%;padding:10px 12px;border:1.5px solid var(--border);
+             border-radius:8px;font-size:15px;background:white;cursor:pointer;">
+      <option value="">Loading doctors...</option>
+    </select>
+    <p id="no-doctor-warn"
+       style="display:none;color:var(--danger);font-size:13px;margin-top:8px;">
+      Please select a doctor before check-in is active.
+    </p>
+  </div>
+
+  <!-- Stats + status -->
+  <div class="card">
+    <div class="card-label">Queue Status</div>
+    <div class="stats-row">
+      <div class="stat-box">
+        <div class="val" id="s-today">—</div>
+        <div class="lbl">Today</div>
+      </div>
+      <div class="stat-box">
+        <div class="val" id="s-limit">—</div>
+        <div class="lbl">Limit</div>
+      </div>
+      <div class="stat-box">
+        <div class="val" id="s-active">—</div>
+        <div class="lbl">Active</div>
+      </div>
+      <div class="stat-box">
+        <div class="val" id="s-until">—</div>
+        <div class="lbl">Until</div>
+      </div>
+    </div>
+    <div>
+      <span class="pill pill-load" id="status-pill">⏳ Loading status...</span>
+    </div>
+  </div>
+
+  <!-- Listening indicator -->
+  <div class="listener">
+    <div class="pulse"></div>
+    <div class="listener-text">
+      <p>Ready — waiting for card tap</p>
+      <small>
+        Place the USB NFC reader on the desk.
+        Patients tap their card to join the queue automatically.
+      </small>
+    </div>
+  </div>
+
+  <!-- Activity log -->
+  <div class="card">
+    <div class="card-label">Recent Check-ins</div>
+    <ul id="activity-list">
+      <li class="placeholder">No activity yet — waiting for first card tap...</li>
+    </ul>
+  </div>
+
+</div>
+
+<!-- Toast -->
+<div id="toast"></div>
+
+<!-- Busy overlay -->
+<div id="busy">
+  <div class="busy-box">
+    <div class="spinner"></div>
+    <div id="busy-label">Processing card...</div>
+  </div>
+</div>
+
+<!-- Hidden NFC input: USB reader types into this field then sends Enter -->
+<input id="nfc" type="text" autocomplete="off" autocorrect="off" spellcheck="false">
+
+<script>
+// ── Firebase init ─────────────────────────────────────────────────────────────
+firebase.initializeApp({
+  apiKey:            'AIzaSyDuFn19DWNpFRxDH1oZQ3SG3bpvxa8O8C4',
+  appId:             '1:144934218340:web:484a00f7210baea88c8d71',
+  messagingSenderId: '144934218340',
+  projectId:         'hospital-flow-app',
+  authDomain:        'hospital-flow-app.firebaseapp.com',
+  storageBucket:     'hospital-flow-app.firebasestorage.app',
+});
+
+const db       = firebase.firestore();
+const FS       = firebase.firestore;  // for FieldValue, Timestamp, etc.
+const AVG_MINS = 15;                  // fallback avg consultation time (minutes)
+let   doctorId = null;                // set when doctor is selected from dropdown
+
+// ── Doctor loader ─────────────────────────────────────────────────────────────
+async function loadDoctors() {
+  const sel = document.getElementById('doctor-select');
+  try {
+    const snap = await db.collection('users').where('role', '==', 'doctor').get();
+    sel.innerHTML = '<option value="">— Select a doctor —</option>';
+    snap.forEach(doc => {
+      const name = (doc.data().name || '').trim();
+      if (!name) return;
+      const opt = document.createElement('option');
+      opt.value = doc.id;          // UID as doctorId
+      opt.textContent = `Dr. ${name}`;
+      sel.appendChild(opt);
+    });
+    if (snap.size === 1) {
+      // Auto-select if only one doctor
+      sel.value = snap.docs[0].id;
+      doctorId = snap.docs[0].id;
+      onDoctorSelected();
+    }
+  } catch (err) {
+    sel.innerHTML = '<option value="">Error loading doctors</option>';
+    console.error('loadDoctors error:', err);
+  }
+}
+
+function onDoctorSelected() {
+  if (doctorId) {
+    document.getElementById('no-doctor-warn').style.display = 'none';
+    // Reset stats display while listeners start
+    document.getElementById('status-pill').textContent = '⏳ Connecting...';
+    document.getElementById('status-pill').className   = 'pill pill-load';
+    startListeners(doctorId); // real-time — no polling needed
+  } else {
+    stopListeners();
+    document.getElementById('status-pill').textContent = '⏳ Select a doctor first';
+    document.getElementById('status-pill').className   = 'pill pill-load';
+  }
+}
+
+document.getElementById('doctor-select').addEventListener('change', function() {
+  doctorId = this.value || null;
+  onDoctorSelected();
+});
+
+loadDoctors();
+
+// ── Clock ─────────────────────────────────────────────────────────────────────
+(function tickClock() {
+  const el = document.getElementById('clock');
+  function update() {
+    el.textContent = new Date().toLocaleTimeString(
+      [], { hour: '2-digit', minute: '2-digit', second: '2-digit' }
+    );
+  }
+  update();
+  setInterval(update, 1000);
+})();
+
+// ── Cached state (populated by onSnapshot listeners) ─────────────────────────
+let _cachedSettings = { dailyLimit: 20, endTimeHour: 23, endTimeMinute: 59 };
+let _cachedStats    = { todayCount: 0, maxToken: 0, activeCount: 0 };
+let _settingsUnsub  = null;
+let _queuesUnsub    = null;
+
+// ── Real-time listeners ───────────────────────────────────────────────────────
+function stopListeners() {
+  if (_settingsUnsub) { _settingsUnsub(); _settingsUnsub = null; }
+  if (_queuesUnsub)   { _queuesUnsub();   _queuesUnsub   = null; }
+}
+
+function startListeners(docId) {
+  stopListeners();
+
+  // Live doctor settings — updates UI instantly when doctor saves new limit/time
+  _settingsUnsub = db.collection('doctor_settings').doc(docId)
+    .onSnapshot(snap => {
+      if (snap.exists) {
+        const d = snap.data();
+        _cachedSettings = {
+          dailyLimit:    d.dailyLimit    ?? 20,
+          endTimeHour:   d.endTimeHour   ?? 23,
+          endTimeMinute: d.endTimeMinute ?? 59,
+        };
+      } else {
+        _cachedSettings = { dailyLimit: 20, endTimeHour: 23, endTimeMinute: 59 };
+      }
+      updateStatusUI();
+    }, err => console.error('Settings listener error:', err));
+
+  // Live queue — updates counters the moment any card taps or Flutter app changes
+  _queuesUnsub = db.collection('queues')
+    .where('doctorId', '==', docId)
+    .onSnapshot(snap => {
+      const today = new Date();
+      let todayCount = 0, maxToken = 0, activeCount = 0;
+      snap.forEach(docSnap => {
+        const d  = docSnap.data();
+        const ts = d.timestamp ? d.timestamp.toDate() : null;
+        if (ts &&
+            ts.getFullYear() === today.getFullYear() &&
+            ts.getMonth()    === today.getMonth() &&
+            ts.getDate()     === today.getDate()) {
+          todayCount++;
+          if ((d.tokenNo ?? 0) > maxToken) maxToken = d.tokenNo ?? 0;
+          const s = d.status ?? '';
+          if (s === 'waiting' || s === 'serving') activeCount++;
+        }
+      });
+      _cachedStats = { todayCount, maxToken, activeCount };
+      updateStatusUI();
+    }, err => console.error('Queue listener error:', err));
+}
+
+function updateStatusUI() {
+  const s = _cachedSettings;
+  const q = _cachedStats;
+
+  document.getElementById('s-today').textContent  = q.todayCount;
+  document.getElementById('s-limit').textContent  = s.dailyLimit;
+  document.getElementById('s-active').textContent = q.activeCount;
+
+  const endSet = s.endTimeHour < 23 || s.endTimeMinute < 59;
+  document.getElementById('s-until').textContent = endSet
+    ? `${String(s.endTimeHour).padStart(2,'0')}:${String(s.endTimeMinute).padStart(2,'0')}`
+    : '∞';
+
+  const blocked = checkBlocked(s, q);
+  const pill = document.getElementById('status-pill');
+  if (blocked) {
+    pill.textContent = '🔴  Queue FULL — no new patients today';
+    pill.className   = 'pill pill-full';
+  } else {
+    const slots = s.dailyLimit - q.todayCount;
+    pill.textContent = `🟢  Open — ${slots} slot${slots === 1 ? '' : 's'} remaining`;
+    pill.className   = 'pill pill-open';
+  }
+}
+
+// ── Helpers (kept for card-tap safety read) ───────────────────────────────────
+function checkBlocked(settings, stats) {
+  if (stats.todayCount >= settings.dailyLimit) {
+    return `Doctor has reached today's patient limit (${settings.dailyLimit} patients). Please try again tomorrow.`;
+  }
+  const endSet = settings.endTimeHour < 23 || settings.endTimeMinute < 59;
+  if (endSet) {
+    const now = new Date();
+    const end = new Date(
+      now.getFullYear(), now.getMonth(), now.getDate(),
+      settings.endTimeHour, settings.endTimeMinute
+    );
+    const estStart = new Date(now.getTime() + (stats.activeCount + 1) * AVG_MINS * 60000);
+    if (estStart > end) {
+      const h = String(settings.endTimeHour).padStart(2, '0');
+      const m = String(settings.endTimeMinute).padStart(2, '0');
+      return `Doctor's schedule is full for today (appointments until ${h}:${m}). Please come back tomorrow.`;
+    }
+  }
+  return null;
+}
+
+// ── Card handler ──────────────────────────────────────────────────────────────
+let _busy = false;
+
+async function handleCardTap(rawId) {
+  const cardId = rawId.trim();
+  if (!cardId || _busy) return;
+
+  if (!doctorId) {
+    document.getElementById('no-doctor-warn').style.display = 'block';
+    toast('Please select a doctor first.', 'error');
+    return;
+  }
+
+  setBusy(true, 'Reading card…');
+
+  try {
+    // 1. Look up activated card
+    const cardSnap = await db.collection('activated_cards').doc(cardId).get();
+
+    if (!cardSnap.exists) {
+      log('error', '❌', 'Card not recognised',
+          'This card has not been activated. Ask reception staff to register it first.');
+      toast('Card not activated — see reception staff.', 'error');
+      return;
+    }
+
+    const cardData  = cardSnap.data();
+    const name      = cardData.patientName ?? 'Unknown Patient';
+    const linkedUid = cardData.linkedUid   ?? '';
+
+    setBusy(true, `Checking queue for ${name}…`);
+
+    // 2. Duplicate check — patient already waiting or being served?
+    const existSnap = await db.collection('queues')
+      .where('doctorId',    '==', doctorId)
+      .where('patientName', '==', name)
+      .get();
+
+    const alreadyActive = existSnap.docs.some(d => {
+      const s = d.data().status ?? '';
+      return s === 'waiting' || s === 'serving';
+    });
+
+    if (alreadyActive) {
+      log('warning', '⚠️', `${name} is already queued`,
+          'Patient has an active token — no duplicate entry created.');
+      toast(`${name} is already in the queue!`, 'warning');
+      return;
+    }
+
+    setBusy(true, 'Checking doctor availability…');
+
+    // 3. Limits check — use live cached state (onSnapshot keeps it current)
+    const blocked = checkBlocked(_cachedSettings, _cachedStats);
+    if (blocked) {
+      log('error', '🚫', `Cannot admit ${name}`, blocked);
+      toast(blocked, 'error');
+      return;
+    }
+
+    setBusy(true, `Adding ${name} to queue…`);
+
+    // 4. Compute next token and ETA from cached stats
+    const nextToken = _cachedStats.todayCount === 0 ? 1 : _cachedStats.maxToken + 1;
+    const position  = _cachedStats.activeCount + 1;
+    const etaMins   = Math.round(position * AVG_MINS);
+
+    // 5. Write queue entry
+    await db.collection('queues').add({
+      doctorId:      doctorId,
+      patientName:   name,
+      patientId:     linkedUid,
+      tokenNo:       nextToken,
+      status:        'waiting',
+      queueStatus:   'Waiting',
+      etaMins:       etaMins,
+      timestamp:     FS.FieldValue.serverTimestamp(),
+      isLinkedToApp: linkedUid !== '',
+    });
+
+    log('success', '✅', `${name}  —  Token #${nextToken}`,
+        `Est. wait: ~${etaMins} min  ·  Position #${position} in queue`);
+    toast(`${name} added — Token #${nextToken}`, 'success');
+    // Status banner updates automatically via onSnapshot — no polling needed
+
+  } catch (err) {
+    console.error('Card tap error:', err);
+    log('error', '⚠️', 'System error', err.message ?? String(err));
+    toast('System error — please try again.', 'error');
+  } finally {
+    setBusy(false);
+  }
+}
+
+// ── UI helpers ────────────────────────────────────────────────────────────────
+function setBusy(on, label) {
+  _busy = on;
+  const el = document.getElementById('busy');
+  el.classList.toggle('show', on);
+  if (on && label) document.getElementById('busy-label').textContent = label;
+}
+
+let _toastTimer;
+function toast(msg, type) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className   = `show toast-${type}`;
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => el.classList.remove('show'), 5000);
+}
+
+const MAX_LOG = 10;
+function log(type, icon, title, detail) {
+  const list = document.getElementById('activity-list');
+
+  // Remove placeholder
+  const placeholder = list.querySelector('.placeholder');
+  if (placeholder) placeholder.remove();
+
+  const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+  const li = document.createElement('li');
+  li.className = `entry ${type}`;
+  li.innerHTML = `
+    <span class="entry-icon">${icon}</span>
+    <div class="entry-body">
+      <strong>${escapeHtml(title)}</strong>
+      <small>${escapeHtml(detail)} · ${time}</small>
+    </div>
+  `;
+  list.prepend(li);
+
+  while (list.children.length > MAX_LOG) list.removeChild(list.lastChild);
+}
+
+function escapeHtml(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+// ── NFC input focus management ────────────────────────────────────────────────
+// USB NFC readers emulate a keyboard: they "type" the card UID and press Enter.
+// We keep a hidden text field permanently focused so the reader always writes
+// into it rather than some random element.
+
+const nfcEl = document.getElementById('nfc');
+
+nfcEl.addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') {
+    const val = nfcEl.value.trim();
+    nfcEl.value = '';
+    if (val && !_busy) handleCardTap(val);
+  }
+});
+
+// Re-focus on any user interaction so focus is never lost
+document.addEventListener('click',            () => nfcEl.focus());
+document.addEventListener('visibilitychange', () => { if (!document.hidden) nfcEl.focus(); });
+window.addEventListener('focus',              () => nfcEl.focus());
+nfcEl.focus();
+</script>
+</body>
+</html>
